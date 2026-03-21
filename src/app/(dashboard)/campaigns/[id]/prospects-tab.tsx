@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react"
 import {
   Plus, Upload, Search, Loader2, ChevronDown, ChevronUp,
-  Trash2, RefreshCw, Building2,
+  Trash2, RefreshCw, Building2, Users, Globe, MapPin, Factory,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -17,33 +17,21 @@ import {
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table"
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
 import type { Prospect } from "@/lib/supabase/types"
 
-const tierColors: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
-  tier_1: "default",
-  tier_2: "secondary",
-  tier_3: "outline",
-  disqualified: "destructive",
-}
-
-const tierLabels: Record<string, string> = {
-  tier_1: "Tier 1",
-  tier_2: "Tier 2",
-  tier_3: "Tier 3",
-  disqualified: "Disqualified",
-}
-
 const researchStatusColors: Record<string, string> = {
   pending: "text-gray-400",
-  researching: "text-yellow-500",
-  completed: "text-green-500",
+  researching: "text-amber-500",
+  completed: "text-green-600",
   failed: "text-red-500",
+}
+
+interface ProspectWithCounts extends Prospect {
+  campaign_contacts: number
+  total_contacts: number
 }
 
 interface ProspectsTabProps {
@@ -51,7 +39,7 @@ interface ProspectsTabProps {
 }
 
 export function ProspectsTab({ campaignId }: ProspectsTabProps) {
-  const [prospects, setProspects] = useState<Prospect[]>([])
+  const [prospects, setProspects] = useState<ProspectWithCounts[]>([])
   const [loading, setLoading] = useState(true)
   const [addOpen, setAddOpen] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
@@ -76,8 +64,31 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
       .eq("campaign_id", campaignId)
       .order("created_at", { ascending: false })
 
-    if (error) toast.error("Failed to load prospects")
-    else setProspects(data || [])
+    if (error) { toast.error("Failed to load prospects"); setLoading(false); return }
+
+    // Get contact counts: campaign contacts and total contacts per prospect
+    const withCounts: ProspectWithCounts[] = await Promise.all(
+      (data || []).map(async (p) => {
+        const { count: campaignContacts } = await supabase
+          .from("contacts")
+          .select("id", { count: "exact", head: true })
+          .eq("prospect_id", p.id)
+          .eq("campaign_id", campaignId)
+
+        const { count: totalContacts } = await supabase
+          .from("contacts")
+          .select("id", { count: "exact", head: true })
+          .eq("prospect_id", p.id)
+
+        return {
+          ...p,
+          campaign_contacts: campaignContacts || 0,
+          total_contacts: totalContacts || 0,
+        }
+      })
+    )
+
+    setProspects(withCounts)
     setLoading(false)
   }, [campaignId])
 
@@ -173,19 +184,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
     }
   }
 
-  const handleTierChange = async (prospectId: string, tier: string) => {
-    const supabase = createClient()
-    const { error } = await supabase
-      .from("prospects")
-      .update({ tier })
-      .eq("id", prospectId)
-
-    if (error) toast.error("Failed to update tier")
-    else {
-      setProspects(prev => prev.map(p => p.id === prospectId ? { ...p, tier: tier as Prospect["tier"] } : p))
-    }
-  }
-
   const handleDelete = async (prospectId: string) => {
     const supabase = createClient()
     const { error } = await supabase.from("prospects").delete().eq("id", prospectId)
@@ -235,9 +233,9 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
       {prospects.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-12">
-            <Building2 className="mb-4 h-12 w-12 text-muted-foreground" />
-            <p className="text-lg font-medium">No prospects yet</p>
-            <p className="text-sm text-muted-foreground">Add companies manually or import a CSV.</p>
+            <Building2 className="mb-4 h-12 w-12 text-gray-300" />
+            <p className="text-lg font-medium text-gray-700">No prospects yet</p>
+            <p className="text-sm text-gray-500">Add companies manually or import a CSV.</p>
           </CardContent>
         </Card>
       ) : (
@@ -250,14 +248,14 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
                     type="checkbox"
                     checked={selectedIds.size === prospects.length}
                     onChange={toggleSelectAll}
-                    className="rounded border-gray-600"
+                    className="rounded"
                   />
                 </TableHead>
                 <TableHead>Company</TableHead>
                 <TableHead>Domain</TableHead>
                 <TableHead>Industry</TableHead>
+                <TableHead>Contacts</TableHead>
                 <TableHead>Research</TableHead>
-                <TableHead>Tier</TableHead>
                 <TableHead className="w-[100px]">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -266,7 +264,7 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
                 <>
                   <TableRow
                     key={prospect.id}
-                    className="cursor-pointer"
+                    className="cursor-pointer hover:bg-gray-50"
                     onClick={() => setExpandedId(expandedId === prospect.id ? null : prospect.id)}
                   >
                     <TableCell onClick={(e) => e.stopPropagation()}>
@@ -274,38 +272,33 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
                         type="checkbox"
                         checked={selectedIds.has(prospect.id)}
                         onChange={() => toggleSelect(prospect.id)}
-                        className="rounded border-gray-600"
+                        className="rounded"
                       />
                     </TableCell>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
                         {prospect.company_name}
-                        {expandedId === prospect.id ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                        {expandedId === prospect.id ? <ChevronUp className="h-4 w-4 text-gray-400" /> : <ChevronDown className="h-4 w-4 text-gray-400" />}
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground">{prospect.domain || "—"}</TableCell>
-                    <TableCell className="text-muted-foreground">{prospect.industry || "—"}</TableCell>
+                    <TableCell className="text-gray-500">{prospect.domain || "—"}</TableCell>
+                    <TableCell className="text-gray-500">{prospect.industry || "—"}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        <Users className="h-3.5 w-3.5 text-gray-400" />
+                        <span className="text-sm font-medium">{prospect.campaign_contacts}</span>
+                        {prospect.total_contacts > prospect.campaign_contacts && (
+                          <span className="text-xs text-gray-400">
+                            / {prospect.total_contacts} in DB
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <span className={researchStatusColors[prospect.ai_research_status]}>
                         {prospect.ai_research_status === "researching" && <Loader2 className="inline h-3 w-3 animate-spin mr-1" />}
                         {prospect.ai_research_status}
                       </span>
-                    </TableCell>
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <Select
-                        value={prospect.tier || ""}
-                        onValueChange={(v) => handleTierChange(prospect.id, v)}
-                      >
-                        <SelectTrigger className="w-[120px] h-8">
-                          <SelectValue placeholder="Set tier" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="tier_1">Tier 1</SelectItem>
-                          <SelectItem value="tier_2">Tier 2</SelectItem>
-                          <SelectItem value="tier_3">Tier 3</SelectItem>
-                          <SelectItem value="disqualified">Disqualified</SelectItem>
-                        </SelectContent>
-                      </Select>
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1">
@@ -331,31 +324,84 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
                   </TableRow>
                   {expandedId === prospect.id && (
                     <TableRow key={`${prospect.id}-detail`}>
-                      <TableCell colSpan={7} className="bg-muted/30">
-                        <div className="p-4 space-y-3">
-                          <div className="grid grid-cols-3 gap-4 text-sm">
-                            <div><span className="text-muted-foreground">Country:</span> {prospect.country || "—"}</div>
-                            <div><span className="text-muted-foreground">Size:</span> {prospect.size || "—"}</div>
-                            <div><span className="text-muted-foreground">Website:</span> {prospect.website || "—"}</div>
+                      <TableCell colSpan={7} className="bg-gray-50/50">
+                        <div className="p-4 space-y-4">
+                          {/* Company details grid */}
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            {prospect.country && (
+                              <div className="flex items-center gap-2 text-sm">
+                                <MapPin className="h-4 w-4 text-gray-400" />
+                                <div>
+                                  <p className="text-xs text-gray-400">Country</p>
+                                  <p className="font-medium">{prospect.country}</p>
+                                </div>
+                              </div>
+                            )}
+                            {prospect.size && (
+                              <div className="flex items-center gap-2 text-sm">
+                                <Users className="h-4 w-4 text-gray-400" />
+                                <div>
+                                  <p className="text-xs text-gray-400">Size</p>
+                                  <p className="font-medium">{prospect.size}</p>
+                                </div>
+                              </div>
+                            )}
+                            {prospect.industry && (
+                              <div className="flex items-center gap-2 text-sm">
+                                <Factory className="h-4 w-4 text-gray-400" />
+                                <div>
+                                  <p className="text-xs text-gray-400">Industry</p>
+                                  <p className="font-medium">{prospect.industry}</p>
+                                </div>
+                              </div>
+                            )}
+                            {prospect.website && (
+                              <div className="flex items-center gap-2 text-sm">
+                                <Globe className="h-4 w-4 text-gray-400" />
+                                <div>
+                                  <p className="text-xs text-gray-400">Website</p>
+                                  <a
+                                    href={prospect.website.startsWith("http") ? prospect.website : `https://${prospect.website}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="font-medium text-blue-600 hover:underline"
+                                  >
+                                    {prospect.website}
+                                  </a>
+                                </div>
+                              </div>
+                            )}
                           </div>
-                          {prospect.tier && (
-                            <div className="flex items-center gap-2">
-                              <Badge variant={tierColors[prospect.tier]}>{tierLabels[prospect.tier]}</Badge>
-                              {prospect.qualification_rationale && (
-                                <span className="text-sm text-muted-foreground">{prospect.qualification_rationale}</span>
-                              )}
+
+                          {prospect.description && (
+                            <div>
+                              <p className="text-xs font-medium text-gray-400 mb-1">Description</p>
+                              <p className="text-sm text-gray-700">{prospect.description}</p>
                             </div>
                           )}
+
+                          {/* AI Research */}
                           {prospect.ai_research ? (
-                            <div className="prose prose-sm prose-invert max-w-none">
-                              <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                                {prospect.ai_research}
+                            <div>
+                              <p className="text-xs font-medium text-gray-400 mb-1">AI Research</p>
+                              <div className="bg-white rounded-lg border p-4">
+                                <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+                                  {prospect.ai_research}
+                                </div>
                               </div>
                             </div>
                           ) : (
-                            <p className="text-sm text-muted-foreground italic">
+                            <p className="text-sm text-gray-400 italic">
                               No research yet. Click the refresh icon to research this company.
                             </p>
+                          )}
+
+                          {prospect.tags && prospect.tags.length > 0 && (
+                            <div className="flex gap-2 flex-wrap">
+                              {prospect.tags.map(tag => (
+                                <Badge key={tag} variant="secondary" className="text-xs">{tag}</Badge>
+                              ))}
+                            </div>
                           )}
                         </div>
                       </TableCell>

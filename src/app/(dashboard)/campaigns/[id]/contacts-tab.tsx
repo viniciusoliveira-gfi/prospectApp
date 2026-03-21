@@ -37,7 +37,7 @@ interface ContactsTabProps {
 }
 
 interface ContactWithProspect extends Contact {
-  prospects: { company_name: string; domain: string | null; tier: string | null } | null
+  prospects: { company_name: string; domain: string | null } | null
 }
 
 export function ContactsTab({ campaignId }: ContactsTabProps) {
