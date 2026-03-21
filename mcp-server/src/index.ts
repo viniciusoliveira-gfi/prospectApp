@@ -288,6 +288,65 @@ server.tool(
 // ============================================================
 
 server.tool(
+  "list_sequences",
+  "List sequences in a campaign with their steps",
+  {
+    campaign_id: z.string(),
+  },
+  async ({ campaign_id }) => {
+    const { data, error } = await supabase
+      .from("sequences")
+      .select("*, sequence_steps(*)")
+      .eq("campaign_id", campaign_id)
+      .order("created_at", { ascending: false });
+
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    if (!data?.length) return { content: [{ type: "text", text: "No sequences in this campaign." }] };
+
+    const lines = data.map(seq => {
+      const steps = ((seq.sequence_steps || []) as { step_number: number; subject_template: string; delay_days: number; id: string }[])
+        .sort((a, b) => a.step_number - b.step_number);
+      const stepLines = steps.map(s =>
+        `    Step ${s.step_number} (day ${s.delay_days}): "${s.subject_template}" — ID: ${s.id}`
+      );
+      return `- **${seq.name}** [${seq.status}] (ID: ${seq.id})\n${stepLines.join("\n")}`;
+    });
+    return { content: [{ type: "text", text: lines.join("\n\n") }] };
+  }
+);
+
+server.tool(
+  "get_sequence_details",
+  "Get full details of a sequence including all step IDs. Use this to get step IDs before pushing emails.",
+  {
+    sequence_id: z.string(),
+  },
+  async ({ sequence_id }) => {
+    const { data, error } = await supabase
+      .from("sequences")
+      .select("*, sequence_steps(*)")
+      .eq("id", sequence_id)
+      .single();
+
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+
+    const steps = ((data.sequence_steps || []) as { id: string; step_number: number; delay_days: number; subject_template: string; body_template: string }[])
+      .sort((a, b) => a.step_number - b.step_number);
+
+    const stepLines = steps.map(s =>
+      `Step ${s.step_number} (day ${s.delay_days}):\n  Subject: "${s.subject_template}"\n  Body: "${s.body_template}"\n  Step ID: ${s.id}`
+    );
+
+    return {
+      content: [{
+        type: "text",
+        text: `**${data.name}** [${data.status}]\nSequence ID: ${data.id}\n\n${stepLines.join("\n\n")}`,
+      }],
+    };
+  }
+);
+
+server.tool(
   "create_sequence",
   "Create an email sequence with steps. Push the email templates/copies you've written with the user.",
   {
@@ -349,9 +408,9 @@ server.tool(
 
 server.tool(
   "push_emails",
-  "Push personalized emails directly into the approval queue. Use this when you've crafted specific emails for each contact with the user.",
+  "Push personalized emails into the approval queue for a specific sequence step.",
   {
-    sequence_step_id: z.string().describe("Sequence step ID this email belongs to"),
+    sequence_step_id: z.string().describe("Sequence step ID (get this from get_sequence_details)"),
     emails: z.array(z.object({
       contact_id: z.string(),
       prospect_id: z.string().optional(),
@@ -373,6 +432,57 @@ server.tool(
     const { data, error } = await supabase.from("emails").insert(records).select();
     if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
     return { content: [{ type: "text", text: `Pushed ${data.length} emails to the approval queue.` }] };
+  }
+);
+
+server.tool(
+  "push_all_emails_for_sequence",
+  "Push personalized emails for ALL contacts and ALL steps in a sequence at once. This is the easiest way to push a full email sequence. Provide emails grouped by step number.",
+  {
+    sequence_id: z.string().describe("Sequence ID"),
+    emails: z.array(z.object({
+      step_number: z.number().describe("Which step this email belongs to (1, 2, 3, etc.)"),
+      contact_id: z.string(),
+      prospect_id: z.string().optional(),
+      subject: z.string(),
+      body: z.string(),
+    })).describe("All emails for all steps and contacts"),
+  },
+  async ({ sequence_id, emails }) => {
+    // Get step IDs for this sequence
+    const { data: steps, error: stepsError } = await supabase
+      .from("sequence_steps")
+      .select("id, step_number")
+      .eq("sequence_id", sequence_id)
+      .order("step_number");
+
+    if (stepsError || !steps?.length) {
+      return { content: [{ type: "text", text: `Error: Could not find steps for sequence. ${stepsError?.message || ""}` }] };
+    }
+
+    const stepMap = Object.fromEntries(steps.map(s => [s.step_number, s.id]));
+
+    const records = emails.map(e => {
+      const stepId = stepMap[e.step_number];
+      if (!stepId) return null;
+      return {
+        sequence_step_id: stepId,
+        contact_id: e.contact_id,
+        prospect_id: e.prospect_id || null,
+        subject: e.subject,
+        body: e.body,
+        approval_status: "pending",
+        send_status: "queued",
+      };
+    }).filter(Boolean);
+
+    if (!records.length) {
+      return { content: [{ type: "text", text: "No valid emails to push. Check step numbers match the sequence." }] };
+    }
+
+    const { data, error } = await supabase.from("emails").insert(records).select();
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    return { content: [{ type: "text", text: `Pushed ${data.length} emails across ${steps.length} steps to the approval queue.` }] };
   }
 );
 
