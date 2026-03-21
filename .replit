@@ -1,0 +1,26 @@
+run = "npm run dev"
+entrypoint = "src/app/layout.tsx"
+
+[nix]
+channel = "stable-24_05"
+
+[nix.packages]
+nodejs = "nodejs_20"
+
+[env]
+PATH = "/home/runner/$REPL_SLUG/node_modules/.bin:$PATH"
+NEXT_TELEMETRY_DISABLED = "1"
+
+[packagerFiles]
+readFiles = ["package.json", "package-lock.json"]
+
+[languages.typescript]
+pattern = "**/{*.ts,*.tsx}"
+syntax = "typescript"
+
+[languages.typescript.languageServer]
+start = "typescript-language-server --stdio"
+
+[[ports]]
+localPort = 3000
+externalPort = 80
