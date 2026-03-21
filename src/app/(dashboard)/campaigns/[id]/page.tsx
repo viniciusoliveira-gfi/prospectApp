@@ -13,6 +13,7 @@ import type { Campaign } from "@/lib/supabase/types"
 import { ProspectsTab } from "./prospects-tab"
 import { ContactsTab } from "./contacts-tab"
 import { SequencesTab } from "./sequences-tab"
+import { EmailsTab } from "./emails-tab"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import {
@@ -132,14 +133,7 @@ export default function CampaignDetailPage() {
         </TabsContent>
 
         <TabsContent value="emails">
-          <Card>
-            <CardHeader><CardTitle>Emails</CardTitle></CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Generated emails will appear here. (Phase 4)
-              </p>
-            </CardContent>
-          </Card>
+          <EmailsTab campaignId={campaignId} />
         </TabsContent>
 
         <TabsContent value="analytics">

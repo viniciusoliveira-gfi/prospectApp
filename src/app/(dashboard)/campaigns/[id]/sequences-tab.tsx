@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import {
   Plus, Loader2, Trash2, Wand2, ListOrdered, GripVertical,
+  Play, Pause, RotateCcw, CheckCircle2, Clock, AlertCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,10 +27,29 @@ interface Step {
   step_type: string
 }
 
+interface SequenceStepDetail {
+  id: string
+  step_number: number
+  delay_days: number
+  subject_template: string
+}
+
+interface EmailStats {
+  total: number
+  approved: number
+  sent: number
+  scheduled: number
+  failed: number
+  skipped: number
+}
+
 interface Sequence {
   id: string
   name: string
   status: string
+  started_at: string | null
+  paused_at: string | null
+  completed_at: string | null
   sequence_steps: { count: number }[]
 }
 
@@ -41,7 +61,11 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
   const [sequences, setSequences] = useState<Sequence[]>([])
   const [loading, setLoading] = useState(true)
   const [createOpen, setCreateOpen] = useState(false)
+  const [confirmStart, setConfirmStart] = useState<string | null>(null)
   const [generating, setGenerating] = useState<string | null>(null)
+  const [actionLoading, setActionLoading] = useState<string | null>(null)
+  const [emailStats, setEmailStats] = useState<Record<string, EmailStats>>({})
+  const [stepDetails, setStepDetails] = useState<Record<string, SequenceStepDetail[]>>({})
 
   // Create form
   const [seqName, setSeqName] = useState("")
@@ -66,7 +90,56 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
     setLoading(false)
   }, [campaignId])
 
+  const fetchEmailStats = useCallback(async (sequenceIds: string[]) => {
+    if (!sequenceIds.length) return
+    const supabase = createClient()
+
+    const newStats: Record<string, EmailStats> = {}
+    const newStepDetails: Record<string, SequenceStepDetail[]> = {}
+
+    for (const seqId of sequenceIds) {
+      // Get steps
+      const { data: stepsData } = await supabase
+        .from("sequence_steps")
+        .select("id, step_number, delay_days, subject_template")
+        .eq("sequence_id", seqId)
+        .order("step_number")
+
+      if (stepsData) {
+        newStepDetails[seqId] = stepsData
+        const stepIds = stepsData.map(s => s.id)
+
+        if (stepIds.length) {
+          const { data: emails } = await supabase
+            .from("emails")
+            .select("approval_status, send_status")
+            .in("sequence_step_id", stepIds)
+
+          if (emails) {
+            newStats[seqId] = {
+              total: emails.length,
+              approved: emails.filter(e => e.approval_status === "approved" || e.approval_status === "edited").length,
+              sent: emails.filter(e => e.send_status === "sent").length,
+              scheduled: emails.filter(e => e.send_status === "scheduled").length,
+              failed: emails.filter(e => e.send_status === "failed").length,
+              skipped: emails.filter(e => e.send_status === "skipped").length,
+            }
+          }
+        }
+      }
+    }
+
+    setEmailStats(prev => ({ ...prev, ...newStats }))
+    setStepDetails(prev => ({ ...prev, ...newStepDetails }))
+  }, [])
+
   useEffect(() => { fetchSequences() }, [fetchSequences])
+
+  useEffect(() => {
+    if (sequences.length) {
+      fetchEmailStats(sequences.map(s => s.id))
+    }
+  }, [sequences, fetchEmailStats])
 
   const handleCreate = async () => {
     if (!seqName.trim()) { toast.error("Sequence name required"); return }
@@ -101,10 +174,54 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       toast.success(`Generated ${data.successful} emails (${data.failed} failed)`)
+      fetchEmailStats([sequenceId])
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Generation failed")
     }
     setGenerating(null)
+  }
+
+  const handleStart = async (sequenceId: string) => {
+    setActionLoading(sequenceId)
+    try {
+      const res = await fetch(`/api/sequences/${sequenceId}/start`, { method: "POST" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      toast.success(`Sequence started! ${data.emails_scheduled} emails scheduled.`)
+      setConfirmStart(null)
+      fetchSequences()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to start sequence")
+    }
+    setActionLoading(null)
+  }
+
+  const handlePause = async (sequenceId: string) => {
+    setActionLoading(sequenceId)
+    try {
+      const res = await fetch(`/api/sequences/${sequenceId}/pause?action=pause`, { method: "POST" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      toast.success("Sequence paused")
+      fetchSequences()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to pause")
+    }
+    setActionLoading(null)
+  }
+
+  const handleResume = async (sequenceId: string) => {
+    setActionLoading(sequenceId)
+    try {
+      const res = await fetch(`/api/sequences/${sequenceId}/pause?action=resume`, { method: "POST" })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error)
+      toast.success(`Sequence resumed. ${data.emails_rescheduled} emails rescheduled.`)
+      fetchSequences()
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to resume")
+    }
+    setActionLoading(null)
   }
 
   const handleDelete = async (sequenceId: string) => {
@@ -132,6 +249,15 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
     setSteps(steps.map((s, i) => i === index ? { ...s, [field]: value } : s))
   }
 
+  const statusBadgeVariant = (status: string): "default" | "secondary" | "destructive" | "outline" => {
+    switch (status) {
+      case "active": return "default"
+      case "paused": return "outline"
+      case "completed": return "secondary"
+      default: return "secondary"
+    }
+  }
+
   if (loading) return <Skeleton className="h-96 w-full" />
 
   return (
@@ -154,42 +280,175 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
         </Card>
       ) : (
         <div className="space-y-4">
-          {sequences.map((seq) => (
-            <Card key={seq.id}>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <CardTitle className="text-base">{seq.name}</CardTitle>
-                  <Badge variant={seq.status === "active" ? "default" : "secondary"}>
-                    {seq.status}
-                  </Badge>
-                  <span className="text-sm text-muted-foreground">
-                    {seq.sequence_steps?.[0]?.count || 0} steps
-                  </span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => handleGenerate(seq.id)}
-                    disabled={generating === seq.id}
-                  >
-                    {generating === seq.id ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <Wand2 className="mr-2 h-4 w-4" />
+          {sequences.map((seq) => {
+            const stats = emailStats[seq.id]
+            const seqSteps = stepDetails[seq.id] || []
+            const isReady = stats && stats.total > 0 && stats.approved === stats.total
+            const isLoading = actionLoading === seq.id
+
+            return (
+              <Card key={seq.id}>
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <div className="flex items-center gap-3">
+                    <CardTitle className="text-base">{seq.name}</CardTitle>
+                    <Badge variant={statusBadgeVariant(seq.status)}>
+                      {seq.status}
+                    </Badge>
+                    <span className="text-sm text-muted-foreground">
+                      {seq.sequence_steps?.[0]?.count || 0} steps
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {/* Start button — only for draft sequences with all emails approved */}
+                    {seq.status === "draft" && (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => setConfirmStart(seq.id)}
+                        disabled={!isReady || isLoading}
+                        title={!isReady ? "Approve all emails first" : "Start sequence"}
+                      >
+                        <Play className="mr-2 h-4 w-4" />
+                        Start
+                      </Button>
                     )}
-                    Generate Emails
-                  </Button>
-                  <Button variant="ghost" size="icon" onClick={() => handleDelete(seq.id)}>
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardHeader>
-            </Card>
-          ))}
+
+                    {/* Pause button — only for active sequences */}
+                    {seq.status === "active" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handlePause(seq.id)}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Pause className="mr-2 h-4 w-4" />}
+                        Pause
+                      </Button>
+                    )}
+
+                    {/* Resume button — only for paused sequences */}
+                    {seq.status === "paused" && (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        onClick={() => handleResume(seq.id)}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+                        Resume
+                      </Button>
+                    )}
+
+                    {seq.status === "draft" && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleGenerate(seq.id)}
+                        disabled={generating === seq.id}
+                      >
+                        {generating === seq.id ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Wand2 className="mr-2 h-4 w-4" />
+                        )}
+                        Generate Emails
+                      </Button>
+                    )}
+
+                    {seq.status === "draft" && (
+                      <Button variant="ghost" size="icon" onClick={() => handleDelete(seq.id)}>
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </CardHeader>
+                <CardContent className="pt-0">
+                  {/* Readiness indicator */}
+                  {stats && stats.total > 0 && (
+                    <div className="mb-3">
+                      <div className="flex items-center gap-2 text-sm">
+                        {isReady ? (
+                          <CheckCircle2 className="h-4 w-4 text-green-600" />
+                        ) : (
+                          <AlertCircle className="h-4 w-4 text-yellow-600" />
+                        )}
+                        <span className={isReady ? "text-green-600" : "text-yellow-600"}>
+                          {stats.approved}/{stats.total} emails approved
+                          {isReady ? " — Ready to start" : ""}
+                        </span>
+                      </div>
+                      {(seq.status === "active" || seq.status === "paused" || seq.status === "completed") && (
+                        <div className="flex gap-4 mt-1 text-xs text-muted-foreground">
+                          <span>{stats.sent} sent</span>
+                          <span>{stats.scheduled} scheduled</span>
+                          {stats.failed > 0 && <span className="text-red-500">{stats.failed} failed</span>}
+                          {stats.skipped > 0 && <span>{stats.skipped} skipped</span>}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Step progress for active/paused/completed sequences */}
+                  {seqSteps.length > 0 && (seq.status === "active" || seq.status === "paused" || seq.status === "completed") && (
+                    <div className="space-y-2">
+                      {seqSteps.map(step => (
+                        <div key={step.id} className="flex items-center gap-3 text-sm">
+                          <Clock className="h-3 w-3 text-muted-foreground" />
+                          <span className="text-muted-foreground w-16">
+                            Day {step.delay_days}
+                          </span>
+                          <span className="truncate flex-1">
+                            Step {step.step_number}: {step.subject_template}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Timing info */}
+                  {seq.started_at && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Started: {new Date(seq.started_at).toLocaleString()}
+                      {seq.completed_at && ` | Completed: ${new Date(seq.completed_at).toLocaleString()}`}
+                      {seq.paused_at && ` | Paused: ${new Date(seq.paused_at).toLocaleString()}`}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            )
+          })}
         </div>
       )}
 
+      {/* Start Confirmation Dialog */}
+      <Dialog open={!!confirmStart} onOpenChange={() => setConfirmStart(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Start Sequence?</DialogTitle>
+            <DialogDescription>
+              This will schedule all approved emails for delivery based on each step&apos;s delay.
+              Emails will be sent automatically during sending hours (9am-6pm).
+              You can pause the sequence at any time.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmStart(null)}>Cancel</Button>
+            <Button
+              onClick={() => confirmStart && handleStart(confirmStart)}
+              disabled={actionLoading === confirmStart}
+            >
+              {actionLoading === confirmStart ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Play className="mr-2 h-4 w-4" />
+              )}
+              Start Sequence
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Create Dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>

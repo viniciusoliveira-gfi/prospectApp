@@ -63,7 +63,11 @@ export interface Sequence {
   campaign_id: string
   name: string
   status: SequenceStatus
+  started_at: string | null
+  paused_at: string | null
+  completed_at: string | null
   created_at: string
+  updated_at: string
 }
 
 export interface SequenceStep {
@@ -124,7 +128,7 @@ export interface Setting {
 export type CampaignInsert = Omit<Campaign, 'id' | 'created_at' | 'updated_at'> & { id?: string }
 export type ProspectInsert = Omit<Prospect, 'id' | 'created_at' | 'updated_at'> & { id?: string }
 export type ContactInsert = Omit<Contact, 'id' | 'created_at' | 'updated_at'> & { id?: string }
-export type SequenceInsert = Omit<Sequence, 'id' | 'created_at'> & { id?: string }
+export type SequenceInsert = Omit<Sequence, 'id' | 'created_at' | 'updated_at'> & { id?: string }
 export type SequenceStepInsert = Omit<SequenceStep, 'id' | 'created_at'> & { id?: string }
 export type EmailInsert = Omit<Email, 'id' | 'created_at' | 'tracking_pixel_id'> & { id?: string; tracking_pixel_id?: string }
 export type ActivityLogInsert = Omit<ActivityLog, 'id' | 'created_at'> & { id?: string }
