@@ -14,7 +14,7 @@ import { ProspectsTab } from "./prospects-tab"
 import { ContactsTab } from "./contacts-tab"
 import { SequencesTab } from "./sequences-tab"
 import { EmailsTab } from "./emails-tab"
-import { ArrowLeft } from "lucide-react"
+import { ArrowLeft, Mail } from "lucide-react"
 import Link from "next/link"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -33,6 +33,7 @@ export default function CampaignDetailPage() {
   const campaignId = params.id as string
   const [campaign, setCampaign] = useState<Campaign | null>(null)
   const [loading, setLoading] = useState(true)
+  const [aliases, setAliases] = useState<string[]>([])
 
   const fetchCampaign = useCallback(async () => {
     const supabase = createClient()
@@ -48,10 +49,43 @@ export default function CampaignDetailPage() {
     } else {
       setCampaign(data)
     }
+
+    // Load Gmail aliases
+    const { data: gmailData } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "gmail_tokens")
+      .single()
+
+    if (gmailData?.value) {
+      const tokens = gmailData.value as { aliases?: string[]; email?: string }
+      const allAliases = tokens.aliases || []
+      if (tokens.email && !allAliases.includes(tokens.email)) {
+        allAliases.unshift(tokens.email)
+      }
+      setAliases(allAliases)
+    }
+
     setLoading(false)
   }, [campaignId, router])
 
   useEffect(() => { fetchCampaign() }, [fetchCampaign])
+
+  const updateSendingAccount = async (account: string) => {
+    const supabase = createClient()
+    const value = account === "default" ? null : account
+    const { error } = await supabase
+      .from("campaigns")
+      .update({ sending_account: value })
+      .eq("id", campaignId)
+
+    if (error) {
+      toast.error("Failed to update sending account")
+    } else {
+      setCampaign(prev => prev ? { ...prev, sending_account: value } : null)
+      toast.success(value ? `Sending from ${value}` : "Using default account")
+    }
+  }
 
   const updateStatus = async (status: string) => {
     const supabase = createClient()
@@ -107,9 +141,31 @@ export default function CampaignDetailPage() {
         </div>
       </div>
 
-      {campaign.description && (
-        <p className="text-sm text-muted-foreground">{campaign.description}</p>
-      )}
+      {/* Sending account + description */}
+      <div className="flex items-center gap-4 flex-wrap">
+        {campaign.description && (
+          <p className="text-sm text-muted-foreground flex-1">{campaign.description}</p>
+        )}
+        {aliases.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Mail className="h-4 w-4 text-gray-400" />
+            <Select
+              value={campaign.sending_account || "default"}
+              onValueChange={updateSendingAccount}
+            >
+              <SelectTrigger className="w-[250px] h-8 text-sm">
+                <SelectValue placeholder="Send from..." />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="default">Default account</SelectItem>
+                {aliases.map(alias => (
+                  <SelectItem key={alias} value={alias}>{alias}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+      </div>
 
       <Tabs defaultValue="prospects" className="space-y-4">
         <TabsList>

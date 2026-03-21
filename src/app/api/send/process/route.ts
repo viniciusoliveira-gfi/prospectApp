@@ -5,36 +5,75 @@ import { sendEmail, GMAIL_LIMITS } from '@/lib/gmail'
 export async function POST() {
   const supabase = createAdminClient()
 
-  // Check how many sent today
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  // Load sending settings
+  const { data: sendingSettings } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', 'sending_defaults')
+    .single()
+
+  const settings = (sendingSettings?.value || {}) as Record<string, string>
+  const accountTimezone = settings.timezone || 'America/Sao_Paulo'
+  const hoursStart = parseInt(settings.hours_start || '9')
+  const hoursEnd = parseInt(settings.hours_end || '18')
+  const maxPerDay = parseInt(settings.daily_limit || '25')
+  const sendDays: string[] = settings.send_days ? JSON.parse(settings.send_days) : ['1', '2', '3', '4', '5']
+
+  // Get current time in account timezone
+  const now = new Date()
+  const tzTime = new Date(now.toLocaleString('en-US', { timeZone: accountTimezone }))
+  const currentHour = tzTime.getHours()
+  const currentDay = String(tzTime.getDay())
+
+  // Check if today is a sending day
+  if (!sendDays.includes(currentDay)) {
+    return NextResponse.json({ message: `Not a sending day (${accountTimezone})`, sent: 0 })
+  }
+
+  // Check how many sent today (using account timezone for "today")
+  const todayInTz = new Date(tzTime)
+  todayInTz.setHours(0, 0, 0, 0)
+  // Convert back to UTC for the query
+  const todayStart = new Date(now.getTime() - (tzTime.getTime() - todayInTz.getTime()))
 
   const { count: sentToday } = await supabase
     .from('emails')
     .select('id', { count: 'exact', head: true })
     .eq('send_status', 'sent')
-    .gte('sent_at', today.toISOString())
+    .gte('sent_at', todayStart.toISOString())
 
-  if ((sentToday || 0) >= GMAIL_LIMITS.maxPerDay) {
+  if ((sentToday || 0) >= maxPerDay) {
     return NextResponse.json({ message: 'Daily send limit reached', sent: 0 })
   }
 
-  // Check sending hours
-  const now = new Date()
-  const currentHour = now.getHours()
-  if (currentHour < GMAIL_LIMITS.sendingHoursStart || currentHour >= GMAIL_LIMITS.sendingHoursEnd) {
-    return NextResponse.json({ message: 'Outside sending hours', sent: 0 })
+  // Check sending hours in account timezone
+  if (currentHour < hoursStart || currentHour >= hoursEnd) {
+    return NextResponse.json({ message: `Outside sending hours (${currentHour}h in ${accountTimezone})`, sent: 0 })
   }
 
   // Get approved, scheduled emails ready to send — only from active sequences
   const { data: activeSequences } = await supabase
     .from('sequences')
-    .select('id')
+    .select('id, campaign_id')
     .eq('status', 'active')
 
   if (!activeSequences?.length) {
     return NextResponse.json({ message: 'No active sequences', sent: 0 })
   }
+
+  // Get campaign sending accounts for alias support
+  const campaignIds = Array.from(new Set(activeSequences.map(s => s.campaign_id)))
+  const { data: campaigns } = await supabase
+    .from('campaigns')
+    .select('id, sending_account')
+    .in('id', campaignIds)
+
+  const campaignSendingAccount = Object.fromEntries(
+    (campaigns || []).map(c => [c.id, c.sending_account])
+  )
+  const sequenceCampaignMap = Object.fromEntries(
+    activeSequences.map(s => [s.id, s.campaign_id])
+  )
 
   const { data: activeSteps } = await supabase
     .from('sequence_steps')
@@ -143,12 +182,17 @@ export async function POST() {
 ${email.body.replace(/\n/g, '<br/>')}
 </div>`
 
+      // Resolve sending alias from campaign
+      const campaignId = stepInfo ? sequenceCampaignMap[stepInfo.sequence_id] : undefined
+      const fromAlias = campaignId ? campaignSendingAccount[campaignId] : undefined
+
       const result = await sendEmail({
         to: email.contacts.email,
         subject: email.subject,
         htmlBody,
         trackingPixelId: email.tracking_pixel_id,
         threadId,
+        fromAlias: fromAlias || undefined,
       })
 
       await supabase.from('emails').update({
@@ -182,7 +226,7 @@ ${email.body.replace(/\n/g, '<br/>')}
     }
 
     // Check daily limit
-    if ((sentToday || 0) + sentCount >= GMAIL_LIMITS.maxPerDay) break
+    if ((sentToday || 0) + sentCount >= maxPerDay) break
   }
 
   // Auto-complete sequences where all emails are sent/skipped

@@ -19,7 +19,19 @@ export async function GET(request: NextRequest) {
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client })
     const { data: userInfo } = await oauth2.userinfo.get()
 
-    // Store tokens in settings
+    // Try to get timezone from Google Calendar
+    let timezone = 'America/Sao_Paulo' // default fallback
+    try {
+      const calendar = google.calendar({ version: 'v3', auth: oauth2Client })
+      const { data: tzSetting } = await calendar.settings.get({ setting: 'timezone' })
+      if (tzSetting.value) {
+        timezone = tzSetting.value
+      }
+    } catch {
+      // Calendar API not enabled or permission denied — use default
+    }
+
+    // Store tokens + timezone in settings
     const supabase = createAdminClient()
     await supabase.from('settings').upsert({
       key: 'gmail_tokens',
@@ -28,6 +40,7 @@ export async function GET(request: NextRequest) {
         refresh_token: tokens.refresh_token,
         expiry_date: tokens.expiry_date,
         email: userInfo.email,
+        timezone,
       },
     })
 
