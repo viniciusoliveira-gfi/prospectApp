@@ -19,6 +19,7 @@ import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
+import { SequenceDetail } from "./sequence-detail"
 
 interface Step {
   delay_days: number
@@ -61,6 +62,7 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
   const [sequences, setSequences] = useState<Sequence[]>([])
   const [loading, setLoading] = useState(true)
   const [createOpen, setCreateOpen] = useState(false)
+  const [viewingSequence, setViewingSequence] = useState<{ id: string; name: string } | null>(null)
   const [confirmStart, setConfirmStart] = useState<string | null>(null)
   const [generating, setGenerating] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
@@ -260,6 +262,17 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
 
   if (loading) return <Skeleton className="h-96 w-full" />
 
+  // Show detail view when a sequence is selected
+  if (viewingSequence) {
+    return (
+      <SequenceDetail
+        sequenceId={viewingSequence.id}
+        sequenceName={viewingSequence.name}
+        onBack={() => setViewingSequence(null)}
+      />
+    )
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-2">
@@ -287,7 +300,11 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
             const isLoading = actionLoading === seq.id
 
             return (
-              <Card key={seq.id}>
+              <Card
+                key={seq.id}
+                className="cursor-pointer hover:border-blue-200 hover:shadow-sm transition-all"
+                onClick={() => setViewingSequence({ id: seq.id, name: seq.name })}
+              >
                 <CardHeader className="flex flex-row items-center justify-between pb-2">
                   <div className="flex items-center gap-3">
                     <CardTitle className="text-base">{seq.name}</CardTitle>
@@ -298,7 +315,7 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
                       {seq.sequence_steps?.[0]?.count || 0} steps
                     </span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                     {/* Start button — only for draft sequences with all emails approved */}
                     {seq.status === "draft" && (
                       <Button

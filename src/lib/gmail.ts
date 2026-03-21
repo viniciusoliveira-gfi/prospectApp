@@ -116,14 +116,17 @@ export async function sendEmail({
   htmlBody,
   trackingPixelId,
   threadId,
+  fromAlias,
 }: {
   to: string
   subject: string
   htmlBody: string
   trackingPixelId: string
   threadId?: string
+  fromAlias?: string
 }) {
   const { gmail, email: senderEmail } = await getGmailClient()
+  const sendFrom = fromAlias || senderEmail
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 
   // Inject tracking pixel
@@ -131,7 +134,7 @@ export async function sendEmail({
     `<img src="${appUrl}/api/track/${trackingPixelId}.png" width="1" height="1" style="display:none" alt="" />`
 
   const raw = createMimeMessage({
-    from: senderEmail,
+    from: sendFrom,
     to,
     subject,
     html: trackedBody,
