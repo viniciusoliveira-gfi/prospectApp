@@ -301,6 +301,196 @@ server.tool("update_sequence_step", "Update a specific step's subject or body te
         return { content: [{ type: "text", text: `Error: ${error.message}` }] };
     return { content: [{ type: "text", text: `Step ${step_number} updated.` }] };
 });
+// ============================================================
+// SEQUENCE ACTIVATION — start, pause, resume, status
+// ============================================================
+server.tool("start_sequence", "Start a sequence — schedules all approved emails for delivery. All emails must be approved first.", {
+    sequence_id: z.string().describe("Sequence ID to start"),
+}, async ({ sequence_id }) => {
+    // Get sequence with steps
+    const { data: sequence, error: seqErr } = await supabase
+        .from("sequences")
+        .select("*, sequence_steps(*)")
+        .eq("id", sequence_id)
+        .single();
+    if (seqErr || !sequence)
+        return { content: [{ type: "text", text: "Sequence not found." }] };
+    if (sequence.status !== "draft") {
+        return { content: [{ type: "text", text: `Cannot start: sequence is "${sequence.status}", must be "draft".` }] };
+    }
+    const steps = (sequence.sequence_steps || [])
+        .sort((a, b) => a.step_number - b.step_number);
+    const stepIds = steps.map(s => s.id);
+    // Get emails
+    const { data: emails } = await supabase
+        .from("emails")
+        .select("id, approval_status, sequence_step_id")
+        .in("sequence_step_id", stepIds);
+    if (!emails?.length) {
+        return { content: [{ type: "text", text: "No emails found. Generate emails first." }] };
+    }
+    // Check readiness
+    const approved = emails.filter(e => e.approval_status === "approved" || e.approval_status === "edited").length;
+    if (approved < emails.length) {
+        return {
+            content: [{
+                    type: "text",
+                    text: `Not ready: ${approved}/${emails.length} emails approved. Approve all emails before starting.`,
+                }],
+        };
+    }
+    // Calculate schedules
+    const now = new Date();
+    const stepDelayMap = Object.fromEntries(steps.map(s => [s.id, s.delay_days]));
+    for (const email of emails) {
+        const delayDays = stepDelayMap[email.sequence_step_id];
+        const scheduled = new Date(now);
+        if (delayDays === 0) {
+            const hour = scheduled.getHours();
+            if (hour < 9 || hour >= 18) {
+                scheduled.setDate(scheduled.getDate() + 1);
+                scheduled.setHours(9, 0, 0, 0);
+            }
+        }
+        else {
+            scheduled.setDate(scheduled.getDate() + delayDays);
+            scheduled.setHours(9, 0, 0, 0);
+        }
+        await supabase.from("emails").update({
+            scheduled_for: scheduled.toISOString(),
+            send_status: "scheduled",
+        }).eq("id", email.id);
+    }
+    await supabase.from("sequences").update({
+        status: "active",
+        started_at: now.toISOString(),
+    }).eq("id", sequence_id);
+    const scheduleLines = steps.map(s => {
+        const d = new Date(now);
+        if (s.delay_days === 0) {
+            if (d.getHours() < 9 || d.getHours() >= 18) {
+                d.setDate(d.getDate() + 1);
+                d.setHours(9, 0, 0, 0);
+            }
+        }
+        else {
+            d.setDate(d.getDate() + s.delay_days);
+            d.setHours(9, 0, 0, 0);
+        }
+        return `  Step ${s.step_number} (day ${s.delay_days}): ${d.toLocaleString()}`;
+    });
+    return {
+        content: [{
+                type: "text",
+                text: `Sequence started! ${emails.length} emails scheduled.\n\nSchedule:\n${scheduleLines.join("\n")}`,
+            }],
+    };
+});
+server.tool("pause_sequence", "Pause an active sequence. Scheduled emails will not be sent until resumed.", {
+    sequence_id: z.string(),
+}, async ({ sequence_id }) => {
+    const { data: sequence } = await supabase.from("sequences").select("status").eq("id", sequence_id).single();
+    if (!sequence)
+        return { content: [{ type: "text", text: "Sequence not found." }] };
+    if (sequence.status !== "active") {
+        return { content: [{ type: "text", text: `Cannot pause: sequence is "${sequence.status}", must be "active".` }] };
+    }
+    await supabase.from("sequences").update({
+        status: "paused",
+        paused_at: new Date().toISOString(),
+    }).eq("id", sequence_id);
+    return { content: [{ type: "text", text: "Sequence paused. No further emails will be sent until resumed." }] };
+});
+server.tool("resume_sequence", "Resume a paused sequence. Schedules are shifted forward by the pause duration.", {
+    sequence_id: z.string(),
+}, async ({ sequence_id }) => {
+    const { data: sequence } = await supabase.from("sequences").select("*").eq("id", sequence_id).single();
+    if (!sequence)
+        return { content: [{ type: "text", text: "Sequence not found." }] };
+    if (sequence.status !== "paused") {
+        return { content: [{ type: "text", text: `Cannot resume: sequence is "${sequence.status}", must be "paused".` }] };
+    }
+    const pausedAt = new Date(sequence.paused_at);
+    const now = new Date();
+    const pauseDurationMs = now.getTime() - pausedAt.getTime();
+    // Get unsent scheduled emails
+    const { data: steps } = await supabase.from("sequence_steps").select("id").eq("sequence_id", sequence_id);
+    const stepIds = (steps || []).map(s => s.id);
+    const { data: emails } = await supabase
+        .from("emails")
+        .select("id, scheduled_for")
+        .in("sequence_step_id", stepIds)
+        .eq("send_status", "scheduled");
+    let rescheduled = 0;
+    if (emails?.length) {
+        for (const email of emails) {
+            if (email.scheduled_for) {
+                const shifted = new Date(new Date(email.scheduled_for).getTime() + pauseDurationMs);
+                await supabase.from("emails").update({ scheduled_for: shifted.toISOString() }).eq("id", email.id);
+                rescheduled++;
+            }
+        }
+    }
+    await supabase.from("sequences").update({
+        status: "active",
+        paused_at: null,
+    }).eq("id", sequence_id);
+    return {
+        content: [{
+                type: "text",
+                text: `Sequence resumed. ${rescheduled} emails rescheduled (shifted forward by ${Math.round(pauseDurationMs / 3600000)} hours).`,
+            }],
+    };
+});
+server.tool("get_sequence_status", "Get detailed status of a sequence including per-step progress and scheduling info.", {
+    sequence_id: z.string(),
+}, async ({ sequence_id }) => {
+    const { data: sequence, error } = await supabase
+        .from("sequences")
+        .select("*, sequence_steps(*)")
+        .eq("id", sequence_id)
+        .single();
+    if (error || !sequence)
+        return { content: [{ type: "text", text: "Sequence not found." }] };
+    const steps = (sequence.sequence_steps || [])
+        .sort((a, b) => a.step_number - b.step_number);
+    const stepLines = [];
+    let totalSent = 0, totalScheduled = 0, totalFailed = 0, totalSkipped = 0;
+    for (const step of steps) {
+        const { data: emails } = await supabase
+            .from("emails")
+            .select("send_status, scheduled_for, open_count, replied_at")
+            .eq("sequence_step_id", step.id);
+        const sent = emails?.filter(e => e.send_status === "sent").length || 0;
+        const scheduled = emails?.filter(e => e.send_status === "scheduled").length || 0;
+        const failed = emails?.filter(e => e.send_status === "failed").length || 0;
+        const skipped = emails?.filter(e => e.send_status === "skipped").length || 0;
+        const opens = emails?.filter(e => e.open_count > 0).length || 0;
+        const replies = emails?.filter(e => e.replied_at).length || 0;
+        const nextScheduled = emails
+            ?.filter(e => e.send_status === "scheduled" && e.scheduled_for)
+            .sort((a, b) => new Date(a.scheduled_for).getTime() - new Date(b.scheduled_for).getTime())[0];
+        totalSent += sent;
+        totalScheduled += scheduled;
+        totalFailed += failed;
+        totalSkipped += skipped;
+        stepLines.push(`**Step ${step.step_number}** (day ${step.delay_days}): "${step.subject_template}"` +
+            `\n  Sent: ${sent} | Scheduled: ${scheduled} | Failed: ${failed} | Skipped: ${skipped}` +
+            `\n  Opens: ${opens} | Replies: ${replies}` +
+            (nextScheduled ? `\n  Next send: ${new Date(nextScheduled.scheduled_for).toLocaleString()}` : ""));
+    }
+    const header = `**${sequence.name}** [${sequence.status}]` +
+        (sequence.started_at ? `\nStarted: ${new Date(sequence.started_at).toLocaleString()}` : "") +
+        (sequence.paused_at ? `\nPaused: ${new Date(sequence.paused_at).toLocaleString()}` : "") +
+        (sequence.completed_at ? `\nCompleted: ${new Date(sequence.completed_at).toLocaleString()}` : "") +
+        `\n\nTotal: ${totalSent} sent, ${totalScheduled} scheduled, ${totalFailed} failed, ${totalSkipped} skipped`;
+    return {
+        content: [{
+                type: "text",
+                text: `${header}\n\n${stepLines.join("\n\n")}`,
+            }],
+    };
+});
 server.tool("push_emails", "Push personalized emails into the approval queue for a specific sequence step.", {
     sequence_step_id: z.string().describe("Sequence step ID (get this from get_sequence_details)"),
     emails: z.array(z.object({

@@ -74,11 +74,13 @@ export function createMimeMessage({
   to,
   subject,
   html,
+  messageId,
 }: {
   from: string
   to: string
   subject: string
   html: string
+  messageId?: string
 }): string {
   const boundary = 'boundary_' + Date.now().toString(36)
   const lines = [
@@ -87,6 +89,15 @@ export function createMimeMessage({
     `Subject: ${subject}`,
     `MIME-Version: 1.0`,
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
+  ]
+
+  // Add threading headers for follow-up emails
+  if (messageId) {
+    lines.push(`In-Reply-To: ${messageId}`)
+    lines.push(`References: ${messageId}`)
+  }
+
+  lines.push(
     '',
     `--${boundary}`,
     'Content-Type: text/html; charset=UTF-8',
@@ -94,7 +105,7 @@ export function createMimeMessage({
     '',
     Buffer.from(html).toString('base64'),
     `--${boundary}--`,
-  ]
+  )
   return lines.join('\r\n')
 }
 
@@ -103,11 +114,13 @@ export async function sendEmail({
   subject,
   htmlBody,
   trackingPixelId,
+  threadId,
 }: {
   to: string
   subject: string
   htmlBody: string
   trackingPixelId: string
+  threadId?: string
 }) {
   const { gmail, email: senderEmail } = await getGmailClient()
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
@@ -123,11 +136,18 @@ export async function sendEmail({
     html: trackedBody,
   })
 
+  const requestBody: { raw: string; threadId?: string } = {
+    raw: Buffer.from(raw).toString('base64url'),
+  }
+
+  // If threading, include threadId so Gmail groups the messages
+  if (threadId) {
+    requestBody.threadId = threadId
+  }
+
   const response = await gmail.users.messages.send({
     userId: 'me',
-    requestBody: {
-      raw: Buffer.from(raw).toString('base64url'),
-    },
+    requestBody,
   })
 
   return {
