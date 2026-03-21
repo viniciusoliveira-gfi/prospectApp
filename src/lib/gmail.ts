@@ -2,10 +2,13 @@ import { google } from 'googleapis'
 import { createAdminClient } from '@/lib/supabase/admin'
 
 export function getOAuthClient() {
+  const redirectUri = process.env.GOOGLE_REDIRECT_URI
+    || `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/auth/google/callback`
+
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
-    process.env.GOOGLE_REDIRECT_URI
+    redirectUri
   )
 }
 
