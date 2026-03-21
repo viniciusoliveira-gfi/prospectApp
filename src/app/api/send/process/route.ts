@@ -5,25 +5,39 @@ import { sendEmail, GMAIL_LIMITS } from '@/lib/gmail'
 export async function POST() {
   const supabase = createAdminClient()
 
-  // Check how many sent today
-  const today = new Date()
-  today.setHours(0, 0, 0, 0)
+  // Get account timezone from settings
+  const { data: tokenSettings } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', 'gmail_tokens')
+    .single()
+
+  const accountTimezone = (tokenSettings?.value as { timezone?: string })?.timezone || 'America/Sao_Paulo'
+
+  // Get current time in account timezone
+  const now = new Date()
+  const tzTime = new Date(now.toLocaleString('en-US', { timeZone: accountTimezone }))
+  const currentHour = tzTime.getHours()
+
+  // Check how many sent today (using account timezone for "today")
+  const todayInTz = new Date(tzTime)
+  todayInTz.setHours(0, 0, 0, 0)
+  // Convert back to UTC for the query
+  const todayStart = new Date(now.getTime() - (tzTime.getTime() - todayInTz.getTime()))
 
   const { count: sentToday } = await supabase
     .from('emails')
     .select('id', { count: 'exact', head: true })
     .eq('send_status', 'sent')
-    .gte('sent_at', today.toISOString())
+    .gte('sent_at', todayStart.toISOString())
 
   if ((sentToday || 0) >= GMAIL_LIMITS.maxPerDay) {
     return NextResponse.json({ message: 'Daily send limit reached', sent: 0 })
   }
 
-  // Check sending hours
-  const now = new Date()
-  const currentHour = now.getHours()
+  // Check sending hours in account timezone
   if (currentHour < GMAIL_LIMITS.sendingHoursStart || currentHour >= GMAIL_LIMITS.sendingHoursEnd) {
-    return NextResponse.json({ message: 'Outside sending hours', sent: 0 })
+    return NextResponse.json({ message: `Outside sending hours (${currentHour}h in ${accountTimezone})`, sent: 0 })
   }
 
   // Get approved, scheduled emails ready to send — only from active sequences
