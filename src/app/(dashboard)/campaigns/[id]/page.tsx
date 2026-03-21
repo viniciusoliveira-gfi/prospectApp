@@ -11,6 +11,8 @@ import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
 import type { Campaign } from "@/lib/supabase/types"
 import { ProspectsTab } from "./prospects-tab"
+import { ContactsTab } from "./contacts-tab"
+import { SequencesTab } from "./sequences-tab"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import {
@@ -122,25 +124,11 @@ export default function CampaignDetailPage() {
         </TabsContent>
 
         <TabsContent value="contacts">
-          <Card>
-            <CardHeader><CardTitle>Contacts</CardTitle></CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Add prospects first, then enrich contacts via Apollo. (Phase 3)
-              </p>
-            </CardContent>
-          </Card>
+          <ContactsTab campaignId={campaignId} />
         </TabsContent>
 
         <TabsContent value="sequences">
-          <Card>
-            <CardHeader><CardTitle>Sequences</CardTitle></CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Create email sequences for this campaign. (Phase 4)
-              </p>
-            </CardContent>
-          </Card>
+          <SequencesTab campaignId={campaignId} />
         </TabsContent>
 
         <TabsContent value="emails">
