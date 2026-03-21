@@ -61,19 +61,36 @@ export async function POST() {
     return NextResponse.json({ message: 'No active sequences', sent: 0 })
   }
 
-  // Get campaign sending accounts for alias support
+  // Get campaign settings for sender accounts, tracking, etc.
   const campaignIds = Array.from(new Set(activeSequences.map(s => s.campaign_id)))
   const { data: campaigns } = await supabase
     .from('campaigns')
-    .select('id, sending_account')
+    .select('id, sending_account, send_settings')
     .in('id', campaignIds)
 
-  const campaignSendingAccount = Object.fromEntries(
-    (campaigns || []).map(c => [c.id, c.sending_account])
-  )
+  interface CampaignConfig {
+    sending_account: string | null
+    sender_accounts: string[]
+    track_opens: boolean
+  }
+  const campaignConfigs: Record<string, CampaignConfig> = {}
+  for (const c of (campaigns || [])) {
+    const ss = c.send_settings as { sender_accounts?: string[]; track_opens?: boolean } | null
+    campaignConfigs[c.id] = {
+      sending_account: c.sending_account,
+      sender_accounts: ss?.sender_accounts || [],
+      track_opens: ss?.track_opens !== false, // default true
+    }
+  }
+
   const sequenceCampaignMap = Object.fromEntries(
     activeSequences.map(s => [s.id, s.campaign_id])
   )
+
+  // Build sender assignment: same sender per prospect (company)
+  // Track which sender was used for each prospect
+  const prospectSenderMap: Record<string, string> = {}
+  const senderSentCount: Record<string, number> = {}
 
   const { data: activeSteps } = await supabase
     .from('sequence_steps')
@@ -182,15 +199,37 @@ export async function POST() {
 ${email.body.replace(/\n/g, '<br/>')}
 </div>`
 
-      // Resolve sending alias from campaign
-      const campaignId = stepInfo ? sequenceCampaignMap[stepInfo.sequence_id] : undefined
-      const fromAlias = campaignId ? campaignSendingAccount[campaignId] : undefined
+      // Resolve sender from campaign config
+      const emailCampaignId = stepInfo ? sequenceCampaignMap[stepInfo.sequence_id] : undefined
+      const config = emailCampaignId ? campaignConfigs[emailCampaignId] : undefined
+      let fromAlias: string | undefined
+
+      if (config && config.sender_accounts.length > 0) {
+        // Multi-account: same sender per prospect
+        const prospectKey = email.prospect_id || email.contact_id
+        if (prospectSenderMap[prospectKey]) {
+          fromAlias = prospectSenderMap[prospectKey]
+        } else {
+          // Pick the sender with fewest sends for even distribution
+          const sorted = [...config.sender_accounts].sort(
+            (a, b) => (senderSentCount[a] || 0) - (senderSentCount[b] || 0)
+          )
+          fromAlias = sorted[0]
+          prospectSenderMap[prospectKey] = fromAlias
+        }
+        senderSentCount[fromAlias] = (senderSentCount[fromAlias] || 0) + 1
+      } else if (config?.sending_account) {
+        fromAlias = config.sending_account
+      }
+
+      // Check if tracking is enabled for this campaign
+      const trackOpens = config?.track_opens !== false
 
       const result = await sendEmail({
         to: email.contacts.email,
         subject: email.subject,
         htmlBody,
-        trackingPixelId: email.tracking_pixel_id,
+        trackingPixelId: trackOpens ? email.tracking_pixel_id : undefined,
         threadId,
         fromAlias: fromAlias || undefined,
       })

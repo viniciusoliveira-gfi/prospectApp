@@ -212,55 +212,51 @@ export default function ProspectDetailPage() {
             Contacts ({contacts.length})
           </CardTitle>
         </CardHeader>
-        <CardContent>
+        <CardContent className="p-0">
           {contacts.length === 0 ? (
             <p className="text-sm text-gray-500 py-4 text-center">
               No contacts found for this company. Add contacts from a campaign.
             </p>
           ) : (
-            <div className="space-y-3">
+            <div className="divide-y">
               {contacts.map(contact => (
-                <div key={contact.id} className="flex items-start justify-between p-4 rounded-lg border bg-white hover:bg-gray-50 transition-colors">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <h4 className="font-medium text-gray-900">
-                        {contact.first_name} {contact.last_name}
-                      </h4>
-                      {contact.campaigns?.name && (
-                        <Badge variant="secondary" className="text-xs">
-                          {contact.campaigns.name}
-                        </Badge>
-                      )}
-                      <Badge
-                        variant={contact.status === "active" ? "outline" : contact.status === "replied" ? "default" : "secondary"}
-                        className={contact.status === "replied" ? "bg-green-100 text-green-700 border-green-200" : ""}
-                      >
-                        {contact.status}
-                      </Badge>
+                <div key={contact.id} className="flex items-center justify-between px-5 py-3 hover:bg-gray-50 transition-colors">
+                  <div className="flex items-center gap-4 min-w-0 flex-1">
+                    <div className="min-w-[180px]">
+                      <p className="text-sm font-medium text-gray-900">{contact.first_name} {contact.last_name}</p>
+                      {contact.title && <p className="text-xs text-gray-500">{contact.title}</p>}
                     </div>
-                    {contact.title && (
-                      <p className="text-sm text-gray-500 mt-0.5">{contact.title}</p>
-                    )}
-                    <div className="flex items-center gap-4 mt-2">
+                    <div className="min-w-[200px]">
                       {contact.email && (
                         <span className="flex items-center gap-1 text-sm text-gray-600">
-                          <Mail className="h-3.5 w-3.5 text-gray-400" />
-                          {contact.email}
-                        </span>
-                      )}
-                      {contact.phone && (
-                        <span className="flex items-center gap-1 text-sm text-gray-600">
-                          <Phone className="h-3.5 w-3.5 text-gray-400" />
-                          {contact.phone}
+                          <Mail className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                          <span className="truncate">{contact.email}</span>
                         </span>
                       )}
                     </div>
+                    {contact.phone && (
+                      <span className="flex items-center gap-1 text-sm text-gray-500">
+                        <Phone className="h-3.5 w-3.5 text-gray-400 shrink-0" />
+                        {contact.phone}
+                      </span>
+                    )}
+                    {contact.campaigns?.name && (
+                      <Badge variant="secondary" className="text-xs shrink-0">
+                        {contact.campaigns.name}
+                      </Badge>
+                    )}
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0 ml-3">
+                    <Badge
+                      variant={contact.status === "active" ? "outline" : contact.status === "replied" ? "default" : "secondary"}
+                      className={contact.status === "replied" ? "bg-green-100 text-green-700 border-green-200 text-xs" : "text-xs"}
+                    >
+                      {contact.status}
+                    </Badge>
                     {contact.linkedin_url && (
-                      <Button variant="ghost" size="icon" asChild>
+                      <Button variant="ghost" size="icon" className="h-7 w-7" asChild>
                         <a href={contact.linkedin_url} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="h-4 w-4 text-gray-400" />
+                          <ExternalLink className="h-3.5 w-3.5 text-gray-400" />
                         </a>
                       </Button>
                     )}

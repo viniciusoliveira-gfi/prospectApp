@@ -121,7 +121,7 @@ export async function sendEmail({
   to: string
   subject: string
   htmlBody: string
-  trackingPixelId: string
+  trackingPixelId?: string
   threadId?: string
   fromAlias?: string
 }) {
@@ -129,9 +129,10 @@ export async function sendEmail({
   const sendFrom = fromAlias || senderEmail
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 
-  // Inject tracking pixel
-  const trackedBody = htmlBody +
-    `<img src="${appUrl}/api/track/${trackingPixelId}.png" width="1" height="1" style="display:none" alt="" />`
+  // Inject tracking pixel (if tracking enabled)
+  const trackedBody = trackingPixelId
+    ? htmlBody + `<img src="${appUrl}/api/track/${trackingPixelId}.png" width="1" height="1" style="display:none" alt="" />`
+    : htmlBody
 
   const raw = createMimeMessage({
     from: sendFrom,

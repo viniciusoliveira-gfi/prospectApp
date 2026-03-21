@@ -9,6 +9,15 @@ export type StepType = 'email' | 'manual_task'
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'edited'
 export type SendStatus = 'queued' | 'scheduled' | 'sending' | 'sent' | 'failed' | 'skipped'
 
+export interface CampaignSendSettings {
+  sender_accounts: string[]
+  track_opens: boolean
+  send_days: string[]
+  send_hours_start: number
+  send_hours_end: number
+  timezone: string
+}
+
 export interface Campaign {
   id: string
   name: string
@@ -17,6 +26,7 @@ export interface Campaign {
   sending_account: string | null
   daily_send_limit: number
   send_interval_minutes: number
+  send_settings: CampaignSendSettings | null
   created_at: string
   updated_at: string
 }

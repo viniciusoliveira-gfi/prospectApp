@@ -70,6 +70,32 @@ interface SequenceDetailProps {
   onBack: () => void
 }
 
+function cleanReplySnippet(snippet: string): string {
+  // Decode HTML entities
+  let clean = snippet
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, "/")
+
+  // Remove the quoted original message ("On ... wrote: ...")
+  const onWroteIndex = clean.search(/On\s+(Mon|Tue|Wed|Thu|Fri|Sat|Sun|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|\d).*wrote:/i)
+  if (onWroteIndex > 0) {
+    clean = clean.substring(0, onWroteIndex).trim()
+  }
+
+  // Also try "em ... escreveu:" for Portuguese
+  const ptIndex = clean.search(/em\s+\d.*escreveu:/i)
+  if (ptIndex > 0) {
+    clean = clean.substring(0, ptIndex).trim()
+  }
+
+  return clean || snippet
+}
+
 function getContactOverallStatus(emails: ContactEmail[]): ContactRow["overall_status"] {
   if (emails.some(e => e.replied_at)) return "replied"
   if (emails.some(e => e.open_count > 0)) return "opened"
@@ -337,9 +363,9 @@ export function SequenceDetail({ sequenceId, sequenceName, onBack }: SequenceDet
                 const isEditable = !isSent && email.send_status !== "sending"
 
                 return (
-                  <div key={step.id} className="border rounded-lg overflow-hidden">
+                  <div key={step.id} className={`border rounded-lg overflow-hidden ${isSent ? "border-green-200 bg-green-50/30" : ""}`}>
                     {/* Step header */}
-                    <div className="bg-gray-50 px-4 py-2.5 flex items-center justify-between border-b">
+                    <div className={`px-4 py-2.5 flex items-center justify-between border-b ${isSent ? "bg-green-50" : "bg-gray-50"}`}>
                       <div className="flex items-center gap-2">
                         <Mail className="h-4 w-4 text-gray-400" />
                         <span className="text-sm font-medium text-gray-700">
@@ -410,7 +436,7 @@ export function SequenceDetail({ sequenceId, sequenceName, onBack }: SequenceDet
                     </div>
 
                     {/* Email footer with status */}
-                    <div className="bg-gray-50 px-4 py-2 flex items-center justify-between border-t">
+                    <div className={`px-4 py-2 flex items-center justify-between border-t ${isSent ? "bg-green-50" : "bg-gray-50"}`}>
                       <div className="flex items-center gap-3">
                         <EmailStatusBadge status={email.send_status} approval={email.approval_status} />
                         {email.sent_at && (
@@ -446,8 +472,11 @@ export function SequenceDetail({ sequenceId, sequenceName, onBack }: SequenceDet
 
                     {/* Reply snippet */}
                     {email.reply_snippet && (
-                      <div className="px-4 py-2 bg-purple-50 border-t text-sm text-purple-700">
-                        <span className="font-medium">Reply:</span> {email.reply_snippet}
+                      <div className="px-4 py-3 bg-purple-50 border-t">
+                        <p className="text-xs font-medium text-purple-500 mb-1">Reply</p>
+                        <p className="text-sm text-purple-800">
+                          {cleanReplySnippet(email.reply_snippet)}
+                        </p>
                       </div>
                     )}
                   </div>
