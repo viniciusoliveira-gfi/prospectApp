@@ -40,25 +40,35 @@ export function EmailsTab({ campaignId }: EmailsTabProps) {
   const [filterApproval, setFilterApproval] = useState<string>("all")
   const [filterSend, setFilterSend] = useState<string>("all")
   const [filterStep, setFilterStep] = useState<string>("all")
+  const [filterSequence, setFilterSequence] = useState<string>("all")
+  const [filterDate, setFilterDate] = useState<string>("all")
+  const [sequenceOptions, setSequenceOptions] = useState<{ id: string; name: string }[]>([])
   const [approving, setApproving] = useState<string | null>(null)
 
   const fetchEmails = useCallback(async () => {
     const supabase = createClient()
 
-    // Get all sequence step IDs for this campaign
+    // Get all sequences for this campaign
     const { data: sequences } = await supabase
       .from("sequences")
-      .select("id")
+      .select("id, name")
       .eq("campaign_id", campaignId)
+      .order("created_at", { ascending: false })
 
     if (!sequences?.length) { setLoading(false); return }
+    setSequenceOptions(sequences)
+
+    // Filter by sequence if selected
+    const seqIds = filterSequence !== "all"
+      ? [filterSequence]
+      : sequences.map(s => s.id)
 
     const { data: steps } = await supabase
       .from("sequence_steps")
       .select("id")
-      .in("sequence_id", sequences.map(s => s.id))
+      .in("sequence_id", seqIds)
 
-    if (!steps?.length) { setLoading(false); return }
+    if (!steps?.length) { setLoading(false); setEmails([]); return }
 
     let query = supabase
       .from("emails")
@@ -80,10 +90,45 @@ export function EmailsTab({ campaignId }: EmailsTabProps) {
           (e.sequence_steps as unknown as { step_number: number })?.step_number === parseInt(filterStep)
         )
       }
+      if (filterDate !== "all") {
+        const now = new Date()
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        let startDate: Date | null = null
+        let endDate: Date | null = null
+
+        if (filterDate === "today") {
+          startDate = today
+          endDate = new Date(today.getTime() + 86400000)
+        } else if (filterDate === "yesterday") {
+          startDate = new Date(today.getTime() - 86400000)
+          endDate = today
+        } else if (filterDate === "last7") {
+          startDate = new Date(today.getTime() - 7 * 86400000)
+          endDate = new Date(today.getTime() + 86400000)
+        } else if (filterDate === "last30") {
+          startDate = new Date(today.getTime() - 30 * 86400000)
+          endDate = new Date(today.getTime() + 86400000)
+        } else if (filterDate === "tomorrow") {
+          startDate = new Date(today.getTime() + 86400000)
+          endDate = new Date(today.getTime() + 2 * 86400000)
+        } else if (filterDate === "next7") {
+          startDate = today
+          endDate = new Date(today.getTime() + 7 * 86400000)
+        }
+
+        if (startDate && endDate) {
+          filtered = filtered.filter(e => {
+            const d = e.sent_at || e.scheduled_for
+            if (!d) return false
+            const date = new Date(d)
+            return date >= startDate! && date < endDate!
+          })
+        }
+      }
       setEmails(filtered as unknown as EmailRow[])
     }
     setLoading(false)
-  }, [campaignId, filterApproval, filterSend, filterStep])
+  }, [campaignId, filterApproval, filterSend, filterStep, filterSequence, filterDate])
 
   useEffect(() => { fetchEmails() }, [fetchEmails])
 
@@ -197,6 +242,33 @@ export function EmailsTab({ campaignId }: EmailsTabProps) {
             <SelectItem value="4">Step 4</SelectItem>
           </SelectContent>
         </Select>
+        <Select value={filterDate} onValueChange={setFilterDate}>
+          <SelectTrigger className="w-[140px]">
+            <SelectValue placeholder="Date" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Dates</SelectItem>
+            <SelectItem value="today">Today</SelectItem>
+            <SelectItem value="yesterday">Yesterday</SelectItem>
+            <SelectItem value="last7">Last 7 days</SelectItem>
+            <SelectItem value="last30">Last 30 days</SelectItem>
+            <SelectItem value="tomorrow">Tomorrow</SelectItem>
+            <SelectItem value="next7">Next 7 days</SelectItem>
+          </SelectContent>
+        </Select>
+        {sequenceOptions.length > 1 && (
+          <Select value={filterSequence} onValueChange={setFilterSequence}>
+            <SelectTrigger className="w-[200px]">
+              <SelectValue placeholder="Sequence" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Sequences</SelectItem>
+              {sequenceOptions.map(s => (
+                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
         {pendingCount > 0 && (
           <Button size="sm" onClick={handleApproveAll}>
             <CheckCircle2 className="mr-2 h-4 w-4" />

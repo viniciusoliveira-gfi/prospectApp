@@ -3,7 +3,6 @@
 import { useState, useEffect, useCallback } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -15,6 +14,7 @@ import { ContactsTab } from "./contacts-tab"
 import { SequencesTab } from "./sequences-tab"
 import { EmailsTab } from "./emails-tab"
 import { SettingsTab } from "./settings-tab"
+import { AnalyticsTab } from "./analytics-tab"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
 import {
@@ -143,14 +143,7 @@ export default function CampaignDetailPage() {
         </TabsContent>
 
         <TabsContent value="analytics">
-          <Card>
-            <CardHeader><CardTitle>Analytics</CardTitle></CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">
-                Start sending emails to see analytics. (Phase 6)
-              </p>
-            </CardContent>
-          </Card>
+          <AnalyticsTab campaignId={campaignId} />
         </TabsContent>
       </Tabs>
     </div>
