@@ -13,6 +13,7 @@ import {
   ChevronRight,
   Zap,
   Building2,
+  FlaskConical,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -22,6 +23,7 @@ const navItems = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/campaigns", label: "Campaigns", icon: Megaphone },
   { href: "/prospects", label: "Prospects", icon: Building2 },
+  { href: "/experiments", label: "Experiments", icon: FlaskConical },
   { href: "/approve", label: "Approval Queue", icon: CheckSquare },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: Settings },

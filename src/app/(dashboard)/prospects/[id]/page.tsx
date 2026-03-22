@@ -12,9 +12,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Separator } from "@/components/ui/separator"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
 import type { Prospect, Contact } from "@/lib/supabase/types"
+import { ResearchDossier } from "./research-dossier"
 
 interface ContactWithMeta extends Contact {
   campaigns: { name: string } | null
@@ -204,7 +206,19 @@ export default function ProspectDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Contacts */}
+      {/* Tabs: Research Dossier + Contacts */}
+      <Tabs defaultValue="research" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="research">Research Dossier</TabsTrigger>
+          <TabsTrigger value="contacts">Contacts ({contacts.length})</TabsTrigger>
+          {prospect.ai_research && <TabsTrigger value="raw-research">Raw Research</TabsTrigger>}
+        </TabsList>
+
+        <TabsContent value="research">
+          <ResearchDossier prospectId={prospectId} />
+        </TabsContent>
+
+        <TabsContent value="contacts">
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
@@ -267,6 +281,22 @@ export default function ProspectDetailPage() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        {prospect.ai_research && (
+          <TabsContent value="raw-research">
+            <Card>
+              <CardContent className="pt-5">
+                <div className="bg-gray-50 rounded-lg p-4">
+                  <div className="whitespace-pre-wrap text-sm leading-relaxed text-gray-700">
+                    {prospect.ai_research}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   )
 }

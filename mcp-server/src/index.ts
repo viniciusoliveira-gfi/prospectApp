@@ -679,7 +679,7 @@ server.tool(
 
 server.tool(
   "push_emails",
-  "Push personalized emails into the approval queue for a specific sequence step.",
+  "Push personalized emails into the approval queue for a specific sequence step. Include metadata for strategy tracking and experiment tags.",
   {
     sequence_step_id: z.string().describe("Sequence step ID (get this from get_sequence_details)"),
     emails: z.array(z.object({
@@ -687,6 +687,10 @@ server.tool(
       prospect_id: z.string().optional(),
       subject: z.string().describe("Final subject line for this contact"),
       body: z.string().describe("Final email body for this contact"),
+      experiment_id: z.string().optional(),
+      variant_id: z.string().optional(),
+      test_dimensions: z.record(z.string()).optional().describe("e.g., {fomo_style: 'named', tone: 'provocative'}"),
+      metadata: z.record(z.unknown()).optional().describe("Strategy metadata: fomo_style, tone, value_prop, subject_style, cta_style, strategy_notes, etc."),
     })),
   },
   async ({ sequence_step_id, emails }) => {
@@ -698,6 +702,10 @@ server.tool(
       body: e.body,
       approval_status: "pending",
       send_status: "queued",
+      experiment_id: e.experiment_id || null,
+      variant_id: e.variant_id || null,
+      test_dimensions: e.test_dimensions || null,
+      metadata: e.metadata || null,
     }));
 
     const { data, error } = await supabase.from("emails").insert(records).select();
@@ -708,7 +716,7 @@ server.tool(
 
 server.tool(
   "push_all_emails_for_sequence",
-  "Push personalized emails for ALL contacts and ALL steps in a sequence at once. This is the easiest way to push a full email sequence. Provide emails grouped by step number.",
+  "Push personalized emails for ALL contacts and ALL steps in a sequence at once. Include metadata for strategy tracking and experiment tags.",
   {
     sequence_id: z.string().describe("Sequence ID"),
     emails: z.array(z.object({
@@ -717,6 +725,10 @@ server.tool(
       prospect_id: z.string().optional(),
       subject: z.string(),
       body: z.string(),
+      experiment_id: z.string().optional(),
+      variant_id: z.string().optional(),
+      test_dimensions: z.record(z.string()).optional(),
+      metadata: z.record(z.unknown()).optional(),
     })).describe("All emails for all steps and contacts"),
   },
   async ({ sequence_id, emails }) => {
@@ -744,6 +756,10 @@ server.tool(
         body: e.body,
         approval_status: "pending",
         send_status: "queued",
+        experiment_id: e.experiment_id || null,
+        variant_id: e.variant_id || null,
+        test_dimensions: e.test_dimensions || null,
+        metadata: e.metadata || null,
       };
     }).filter(Boolean);
 
@@ -1237,6 +1253,477 @@ server.tool(
     const { error } = await supabase.from("settings").upsert({ key: "sending_defaults", value });
     if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
     return { content: [{ type: "text", text: "Settings updated." }] };
+  }
+);
+
+// ============================================================
+// PROSPECT RESEARCH DOSSIERS
+// ============================================================
+
+server.tool(
+  "push_prospect_research",
+  "Push structured research dossier for a prospect. This is the main way to upload detailed company intelligence.",
+  {
+    prospect_id: z.string(),
+    campaign_id: z.string().optional(),
+    company_overview: z.string().optional(),
+    market_position: z.string().optional(),
+    tech_stack: z.record(z.unknown()).optional(),
+    recent_news: z.string().optional(),
+    pain_points: z.array(z.object({
+      pain: z.string(),
+      severity: z.enum(["high", "medium", "low"]),
+      evidence: z.string(),
+    })).optional(),
+    opportunities: z.array(z.object({
+      opportunity: z.string(),
+      fit_score: z.number().min(1).max(10),
+      rationale: z.string(),
+    })).optional(),
+    personas: z.array(z.object({
+      name: z.string(),
+      title: z.string(),
+      contact_id: z.string().optional(),
+      role_in_deal: z.string(),
+      pain_points: z.array(z.string()),
+      messaging_angle: z.string(),
+      tone: z.string(),
+    })).optional(),
+    local_competitors: z.array(z.object({
+      company_name: z.string(),
+      relationship: z.string(),
+      fomo_usable: z.boolean(),
+    })).optional(),
+    fomo_strategy: z.string().optional(),
+    competitor_naming_strategy: z.enum(["named", "unnamed", "mixed"]).optional(),
+    core_value_prop: z.string().optional(),
+    messaging_hypotheses: z.array(z.object({
+      hypothesis: z.string(),
+      test_dimension: z.string(),
+      confidence: z.enum(["high", "medium", "low"]),
+    })).optional(),
+    positioning_angle: z.string().optional(),
+    objection_map: z.array(z.object({
+      objection: z.string(),
+      response: z.string(),
+    })).optional(),
+    research_depth: z.enum(["shallow", "standard", "deep"]).optional(),
+  },
+  async ({ prospect_id, campaign_id, ...research }) => {
+    // Check if research exists for this prospect
+    const { data: existing } = await supabase
+      .from("prospect_research")
+      .select("id")
+      .eq("prospect_id", prospect_id)
+      .single();
+
+    const record = {
+      prospect_id,
+      campaign_id: campaign_id || null,
+      ...Object.fromEntries(Object.entries(research).filter(([, v]) => v !== undefined)),
+      researched_at: new Date().toISOString(),
+      researched_by: "claude",
+    };
+
+    if (existing) {
+      const { error } = await supabase.from("prospect_research").update(record).eq("id", existing.id);
+      if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+      return { content: [{ type: "text", text: "Research dossier updated." }] };
+    } else {
+      const { error } = await supabase.from("prospect_research").insert(record);
+      if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+      return { content: [{ type: "text", text: "Research dossier created." }] };
+    }
+  }
+);
+
+server.tool(
+  "get_prospect_research",
+  "Get the structured research dossier for a prospect.",
+  {
+    prospect_id: z.string(),
+  },
+  async ({ prospect_id }) => {
+    const { data, error } = await supabase
+      .from("prospect_research")
+      .select("*")
+      .eq("prospect_id", prospect_id)
+      .single();
+
+    if (error || !data) return { content: [{ type: "text", text: "No research dossier found for this prospect." }] };
+
+    const pains = (data.pain_points as { pain: string; severity: string; evidence: string }[] || []);
+    const personas = (data.personas as { name: string; title: string; messaging_angle: string }[] || []);
+    const competitors = (data.local_competitors as { company_name: string; fomo_usable: boolean }[] || []);
+    const hypotheses = (data.messaging_hypotheses as { hypothesis: string; confidence: string }[] || []);
+    const objections = (data.objection_map as { objection: string; response: string }[] || []);
+
+    let text = `**Research Dossier** (${data.research_depth} depth, by ${data.researched_by})\n\n`;
+    if (data.company_overview) text += `**Overview:** ${data.company_overview}\n\n`;
+    if (data.market_position) text += `**Market Position:** ${data.market_position}\n\n`;
+    if (data.recent_news) text += `**Recent News:** ${data.recent_news}\n\n`;
+    if (data.core_value_prop) text += `**Core Value Prop:** ${data.core_value_prop}\n\n`;
+    if (data.positioning_angle) text += `**Positioning:** ${data.positioning_angle}\n\n`;
+
+    if (pains.length) {
+      text += `**Pain Points:**\n${pains.map(p => `- [${p.severity.toUpperCase()}] ${p.pain} — ${p.evidence}`).join("\n")}\n\n`;
+    }
+    if (personas.length) {
+      text += `**Personas:**\n${personas.map(p => `- ${p.name} (${p.title}) — Angle: ${p.messaging_angle}`).join("\n")}\n\n`;
+    }
+    if (competitors.length) {
+      text += `**Local Competitors:**\n${competitors.map(c => `- ${c.company_name} (FOMO usable: ${c.fomo_usable ? "yes" : "no"})`).join("\n")}\n\n`;
+    }
+    if (data.fomo_strategy) text += `**FOMO Strategy:** ${data.fomo_strategy}\n\n`;
+    if (hypotheses.length) {
+      text += `**Messaging Hypotheses:**\n${hypotheses.map(h => `- [${h.confidence}] ${h.hypothesis}`).join("\n")}\n\n`;
+    }
+    if (objections.length) {
+      text += `**Objection Map:**\n${objections.map(o => `- "${o.objection}" → ${o.response}`).join("\n")}\n\n`;
+    }
+
+    return { content: [{ type: "text", text }] };
+  }
+);
+
+// ============================================================
+// EXPERIMENT ENGINE
+// ============================================================
+
+server.tool(
+  "create_experiment",
+  "Create an A/B/C/D experiment to test a hypothesis. Claude should create experiments to systematically test what works.",
+  {
+    campaign_id: z.string().optional(),
+    name: z.string(),
+    description: z.string().optional(),
+    test_dimension: z.string().describe("e.g., 'fomo_style', 'tone', 'value_prop', 'subject_style', 'email_length', 'cta_style', 'sequence_timing'"),
+    hypothesis: z.string().describe("What you expect to happen"),
+    variants: z.array(z.object({
+      variant_id: z.string().describe("A, B, C, or D"),
+      label: z.string(),
+      description: z.string(),
+    })),
+    assignment_method: z.enum(["random", "by_metro", "by_company_size", "by_persona", "manual"]).optional(),
+    primary_metric: z.enum(["reply_rate", "open_rate", "positive_reply_rate", "meeting_booked_rate"]).optional(),
+    secondary_metrics: z.array(z.string()).optional(),
+    min_sample_per_variant: z.number().optional(),
+  },
+  async ({ campaign_id, name, description, test_dimension, hypothesis, variants, assignment_method, primary_metric, secondary_metrics, min_sample_per_variant }) => {
+    const { data, error } = await supabase
+      .from("experiments")
+      .insert({
+        campaign_id: campaign_id || null,
+        name,
+        description: description || null,
+        test_dimension,
+        hypothesis,
+        variants,
+        assignment_method: assignment_method || "random",
+        primary_metric: primary_metric || "reply_rate",
+        secondary_metrics: secondary_metrics || null,
+        min_sample_per_variant: min_sample_per_variant || 10,
+      })
+      .select()
+      .single();
+
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    return { content: [{ type: "text", text: `Experiment "${name}" created. ID: ${data.id}\nVariants: ${variants.map(v => `${v.variant_id}: ${v.label}`).join(", ")}` }] };
+  }
+);
+
+server.tool(
+  "assign_experiment_variants",
+  "Assign contacts to experiment variants. Claude decides the split.",
+  {
+    experiment_id: z.string(),
+    assignments: z.array(z.object({
+      contact_id: z.string(),
+      variant_id: z.string(),
+    })),
+  },
+  async ({ experiment_id, assignments }) => {
+    const records = assignments.map(a => ({
+      experiment_id,
+      contact_id: a.contact_id,
+      variant_id: a.variant_id,
+    }));
+
+    const { data, error } = await supabase.from("experiment_assignments").upsert(records, { onConflict: "experiment_id,contact_id" }).select();
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+
+    // Activate experiment if it was draft
+    await supabase.from("experiments").update({ status: "active" }).eq("id", experiment_id).eq("status", "draft");
+
+    return { content: [{ type: "text", text: `Assigned ${data.length} contacts to variants.` }] };
+  }
+);
+
+server.tool(
+  "get_experiment_results",
+  "Get experiment results with per-variant metrics and statistical significance.",
+  {
+    experiment_id: z.string(),
+  },
+  async ({ experiment_id }) => {
+    const { data: experiment } = await supabase
+      .from("experiments")
+      .select("*")
+      .eq("id", experiment_id)
+      .single();
+
+    if (!experiment) return { content: [{ type: "text", text: "Experiment not found." }] };
+
+    const { data: assignments } = await supabase
+      .from("experiment_assignments")
+      .select("*")
+      .eq("experiment_id", experiment_id);
+
+    if (!assignments?.length) return { content: [{ type: "text", text: "No assignments yet." }] };
+
+    const variants = (experiment.variants as { variant_id: string; label: string }[]);
+    const variantStats: Record<string, { label: string; contacts: number; sent: number; opened: number; replied: number; positive: number }> = {};
+
+    for (const v of variants) {
+      const variantAssignments = assignments.filter(a => a.variant_id === v.variant_id);
+      variantStats[v.variant_id] = {
+        label: v.label,
+        contacts: variantAssignments.length,
+        sent: variantAssignments.reduce((sum, a) => sum + a.emails_sent, 0),
+        opened: variantAssignments.reduce((sum, a) => sum + a.emails_opened, 0),
+        replied: variantAssignments.reduce((sum, a) => sum + a.emails_replied, 0),
+        positive: variantAssignments.filter(a => a.reply_sentiment === "positive").length,
+      };
+    }
+
+    let text = `**${experiment.name}** [${experiment.status}]\n`;
+    text += `Hypothesis: ${experiment.hypothesis}\n`;
+    text += `Dimension: ${experiment.test_dimension} | Metric: ${experiment.primary_metric}\n\n`;
+
+    for (const [vid, stats] of Object.entries(variantStats)) {
+      const openRate = stats.sent > 0 ? Math.round((stats.opened / stats.sent) * 100) : 0;
+      const replyRate = stats.sent > 0 ? Math.round((stats.replied / stats.sent) * 100) : 0;
+      const sufficientData = stats.contacts >= experiment.min_sample_per_variant;
+
+      text += `**Variant ${vid}: ${stats.label}**\n`;
+      text += `  Contacts: ${stats.contacts}/${experiment.min_sample_per_variant} min | Sent: ${stats.sent}\n`;
+      text += `  Open rate: ${openRate}% | Reply rate: ${replyRate}% | Positive: ${stats.positive}\n`;
+      text += `  Data: ${sufficientData ? "✓ Sufficient" : "✗ Need more"}\n\n`;
+    }
+
+    if (experiment.winner_variant) text += `**Winner: Variant ${experiment.winner_variant}**\n`;
+    if (experiment.learnings) text += `**Learnings:** ${experiment.learnings}\n`;
+
+    return { content: [{ type: "text", text }] };
+  }
+);
+
+server.tool(
+  "complete_experiment",
+  "Mark an experiment as completed, declare a winner, and record learnings.",
+  {
+    experiment_id: z.string(),
+    winner_variant: z.string().describe("The winning variant ID (A, B, C, D)"),
+    learnings: z.string().describe("What we learned from this experiment"),
+    add_to_playbook: z.boolean().optional().describe("Also save as a growth playbook entry"),
+    vertical: z.string().optional().describe("Vertical for the playbook entry"),
+  },
+  async ({ experiment_id, winner_variant, learnings, add_to_playbook, vertical }) => {
+    const { data: experiment, error } = await supabase
+      .from("experiments")
+      .update({
+        status: "analyzed",
+        winner_variant,
+        learnings,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", experiment_id)
+      .select()
+      .single();
+
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+
+    if (add_to_playbook) {
+      await supabase.from("growth_playbook").insert({
+        dimension: experiment.test_dimension,
+        vertical: vertical || null,
+        insight: learnings,
+        evidence: `Experiment: ${experiment.name} (${experiment_id})`,
+        confidence: "tested",
+        source_experiment_id: experiment_id,
+      });
+    }
+
+    return { content: [{ type: "text", text: `Experiment completed. Winner: ${winner_variant}. Learnings recorded.${add_to_playbook ? " Added to growth playbook." : ""}` }] };
+  }
+);
+
+server.tool(
+  "list_experiments",
+  "List all experiments, optionally filtered by campaign.",
+  {
+    campaign_id: z.string().optional(),
+    status: z.enum(["draft", "active", "paused", "completed", "analyzed"]).optional(),
+  },
+  async ({ campaign_id, status }) => {
+    let query = supabase.from("experiments").select("*").order("created_at", { ascending: false });
+    if (campaign_id) query = query.eq("campaign_id", campaign_id);
+    if (status) query = query.eq("status", status);
+
+    const { data, error } = await query;
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    if (!data?.length) return { content: [{ type: "text", text: "No experiments found." }] };
+
+    const lines = data.map(e => {
+      const variants = (e.variants as { variant_id: string; label: string }[]);
+      return `- **${e.name}** [${e.status}] — ${e.test_dimension}\n  Hypothesis: ${e.hypothesis}\n  Variants: ${variants.map(v => v.variant_id + ": " + v.label).join(", ")}${e.winner_variant ? `\n  Winner: ${e.winner_variant}` : ""}\n  ID: ${e.id}`;
+    });
+    return { content: [{ type: "text", text: lines.join("\n\n") }] };
+  }
+);
+
+// ============================================================
+// GROWTH PLAYBOOK
+// ============================================================
+
+server.tool(
+  "add_to_playbook",
+  "Add an insight to the growth playbook. This is how Claude stores what it learns for future campaigns.",
+  {
+    dimension: z.string().describe("e.g., 'fomo_style', 'tone', 'value_prop'"),
+    insight: z.string().describe("What we learned"),
+    vertical: z.string().optional().describe("e.g., 'real_estate', 'saas', 'consulting'"),
+    evidence: z.string().optional().describe("Supporting evidence or experiment reference"),
+    confidence: z.enum(["hypothesis", "tested", "validated", "proven"]).optional(),
+    applies_to: z.record(z.unknown()).optional().describe("Where this insight applies"),
+    source_experiment_id: z.string().optional(),
+  },
+  async ({ dimension, insight, vertical, evidence, confidence, applies_to, source_experiment_id }) => {
+    const { data, error } = await supabase.from("growth_playbook").insert({
+      dimension,
+      insight,
+      vertical: vertical || null,
+      evidence: evidence || null,
+      confidence: confidence || "hypothesis",
+      applies_to: applies_to || null,
+      source_experiment_id: source_experiment_id || null,
+    }).select().single();
+
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    return { content: [{ type: "text", text: `Playbook entry added. ID: ${data.id}` }] };
+  }
+);
+
+server.tool(
+  "get_playbook",
+  "Get growth playbook entries. Claude should read this before writing copy for any campaign to apply past learnings.",
+  {
+    dimension: z.string().optional().describe("Filter by dimension"),
+    vertical: z.string().optional().describe("Filter by vertical"),
+  },
+  async ({ dimension, vertical }) => {
+    let query = supabase.from("growth_playbook").select("*").order("confidence").order("created_at", { ascending: false });
+    if (dimension) query = query.eq("dimension", dimension);
+    if (vertical) query = query.eq("vertical", vertical);
+
+    const { data, error } = await query;
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    if (!data?.length) return { content: [{ type: "text", text: "No playbook entries yet. Run experiments and record learnings!" }] };
+
+    const lines = data.map(e =>
+      `- [${e.confidence.toUpperCase()}] **${e.dimension}**${e.vertical ? ` (${e.vertical})` : ""}: ${e.insight}${e.evidence ? `\n  Evidence: ${e.evidence}` : ""}`
+    );
+    return { content: [{ type: "text", text: `**Growth Playbook** (${data.length} entries):\n\n${lines.join("\n\n")}` }] };
+  }
+);
+
+server.tool(
+  "update_playbook_entry",
+  "Update a playbook entry's confidence level or content.",
+  {
+    entry_id: z.string(),
+    insight: z.string().optional(),
+    confidence: z.enum(["hypothesis", "tested", "validated", "proven"]).optional(),
+    evidence: z.string().optional(),
+  },
+  async ({ entry_id, ...updates }) => {
+    const clean = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
+    const { error } = await supabase.from("growth_playbook").update(clean).eq("id", entry_id);
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    return { content: [{ type: "text", text: "Playbook entry updated." }] };
+  }
+);
+
+// ============================================================
+// ANALYTICS
+// ============================================================
+
+server.tool(
+  "get_analytics",
+  "Get analytics with optional grouping by metadata dimensions. Claude uses this to self-serve insights.",
+  {
+    campaign_id: z.string().optional(),
+    group_by: z.string().optional().describe("Group by metadata dimension: 'fomo_style', 'tone', 'value_prop', 'subject_style', 'cta_style'"),
+    experiment_id: z.string().optional(),
+  },
+  async ({ campaign_id, group_by, experiment_id }) => {
+    let query = supabase
+      .from("emails")
+      .select("send_status, open_count, replied_at, metadata, experiment_id, variant_id, test_dimensions, prospect_id");
+
+    if (experiment_id) query = query.eq("experiment_id", experiment_id);
+
+    const { data: emails, error } = await query;
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    if (!emails?.length) return { content: [{ type: "text", text: "No email data." }] };
+
+    // Filter by campaign if needed
+    let filtered = emails;
+    if (campaign_id) {
+      const { data: prospects } = await supabase.from("prospects").select("id").eq("campaign_id", campaign_id);
+      const pIds = new Set((prospects || []).map(p => p.id));
+      filtered = emails.filter(e => e.prospect_id && pIds.has(e.prospect_id));
+    }
+
+    if (group_by) {
+      // Group by metadata dimension
+      const groups: Record<string, { sent: number; opened: number; replied: number }> = {};
+      for (const e of filtered) {
+        const meta = e.metadata as Record<string, string> | null;
+        const dims = e.test_dimensions as Record<string, string> | null;
+        const value = meta?.[group_by] || dims?.[group_by] || "unknown";
+        if (!groups[value]) groups[value] = { sent: 0, opened: 0, replied: 0 };
+        if (e.send_status === "sent") {
+          groups[value].sent++;
+          if (e.open_count > 0) groups[value].opened++;
+          if (e.replied_at) groups[value].replied++;
+        }
+      }
+
+      const lines = Object.entries(groups).map(([value, stats]) => {
+        const openRate = stats.sent > 0 ? Math.round((stats.opened / stats.sent) * 100) : 0;
+        const replyRate = stats.sent > 0 ? Math.round((stats.replied / stats.sent) * 100) : 0;
+        return `**${group_by}="${value}"**: Sent ${stats.sent} | Open ${openRate}% | Reply ${replyRate}%`;
+      });
+
+      return { content: [{ type: "text", text: `Analytics by ${group_by}:\n\n${lines.join("\n")}` }] };
+    }
+
+    // Overall stats
+    const sent = filtered.filter(e => e.send_status === "sent");
+    const opened = sent.filter(e => e.open_count > 0);
+    const replied = sent.filter(e => e.replied_at);
+
+    return {
+      content: [{
+        type: "text",
+        text: `**Analytics${campaign_id ? " (campaign)" : " (all)"}:**\n` +
+          `Total emails: ${filtered.length}\n` +
+          `Sent: ${sent.length}\n` +
+          `Opened: ${opened.length} (${sent.length ? Math.round((opened.length / sent.length) * 100) : 0}%)\n` +
+          `Replied: ${replied.length} (${sent.length ? Math.round((replied.length / sent.length) * 100) : 0}%)`,
+      }],
+    };
   }
 );
 
