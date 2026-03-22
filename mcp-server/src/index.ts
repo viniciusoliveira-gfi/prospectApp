@@ -383,7 +383,7 @@ server.tool(
 
 server.tool(
   "update_sequence_step",
-  "Update a specific step's subject or body template",
+  "Update a specific step's subject, body template, or delay_days. If delay_days changes, all unsent emails are automatically rescheduled.",
   {
     sequence_id: z.string(),
     step_number: z.number().describe("Which step to update (1, 2, 3, etc.)"),
@@ -402,7 +402,21 @@ server.tool(
       .single();
 
     if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
-    return { content: [{ type: "text", text: `Step ${step_number} updated.` }] };
+
+    // If delay_days changed, recalculate all unsent email schedules
+    let recalcResult = "";
+    if (updates.delay_days !== undefined) {
+      const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
+      try {
+        const res = await fetch(`${appUrl}/api/sequences/${sequence_id}/recalculate`, { method: "POST" });
+        const rData = await res.json();
+        recalcResult = ` ${rData.rescheduled || 0} emails rescheduled.`;
+      } catch {
+        recalcResult = " (schedule recalculation failed — run recalculate_sequence_schedule manually)";
+      }
+    }
+
+    return { content: [{ type: "text", text: `Step ${step_number} updated.${recalcResult}` }] };
   }
 );
 
