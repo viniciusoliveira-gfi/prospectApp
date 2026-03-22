@@ -24,10 +24,15 @@ export async function GET() {
         const { data } = await gmail.users.settings.sendAs.list({ userId: 'me' })
         const sendAsAddresses = data.sendAs || []
 
+        // Include all verified/accepted aliases and the primary address
+        // Workspace accounts may use 'accepted' or other statuses
         const aliases = sendAsAddresses
-          .filter(a => a.verificationStatus === 'accepted' || a.isPrimary)
+          .filter(a => a.isPrimary || a.verificationStatus === 'accepted' || a.verificationStatus === 'verified' || !a.verificationStatus)
           .map(a => a.sendAsEmail!)
           .filter(Boolean)
+
+        // Log for debugging
+        console.log(`Aliases for ${tokens.email}:`, sendAsAddresses.map(a => `${a.sendAsEmail} (${a.verificationStatus}, primary: ${a.isPrimary})`))
 
         allAliases.push(...aliases)
 
