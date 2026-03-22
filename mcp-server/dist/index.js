@@ -321,10 +321,10 @@ server.tool("start_sequence", "Start a sequence — schedules all approved email
     const steps = (sequence.sequence_steps || [])
         .sort((a, b) => a.step_number - b.step_number);
     const stepIds = steps.map(s => s.id);
-    // Get emails
+    // Get emails with prospect info for sender assignment
     const { data: emails } = await supabase
         .from("emails")
-        .select("id, approval_status, sequence_step_id")
+        .select("id, approval_status, sequence_step_id, prospect_id, contact_id")
         .in("sequence_step_id", stepIds);
     if (!emails?.length) {
         return { content: [{ type: "text", text: "No emails found. Generate emails first." }] };
@@ -339,7 +339,28 @@ server.tool("start_sequence", "Start a sequence — schedules all approved email
                 }],
         };
     }
-    // Calculate schedules
+    // Get campaign send settings for sender assignment
+    const { data: campaign } = await supabase
+        .from("campaigns")
+        .select("send_settings, sending_account")
+        .eq("id", sequence.campaign_id)
+        .single();
+    const ss = campaign?.send_settings;
+    let senderAccounts = ss?.sender_accounts || [];
+    if (!senderAccounts.length && campaign?.sending_account)
+        senderAccounts = [campaign.sending_account];
+    if (!senderAccounts.length) {
+        const { data: gmail } = await supabase.from("settings").select("value").eq("key", "gmail_tokens").single();
+        if (gmail?.value) {
+            const t = gmail.value;
+            if (t.email)
+                senderAccounts = [t.email];
+        }
+    }
+    // Assign senders: same per prospect, distributed evenly
+    const prospectSenderMap = {};
+    const senderCounts = {};
+    // Calculate schedules and assign senders
     const now = new Date();
     const stepDelayMap = Object.fromEntries(steps.map(s => [s.id, s.delay_days]));
     for (const email of emails) {
@@ -356,9 +377,24 @@ server.tool("start_sequence", "Start a sequence — schedules all approved email
             scheduled.setDate(scheduled.getDate() + delayDays);
             scheduled.setHours(9, 0, 0, 0);
         }
+        // Assign sender
+        let sender = null;
+        if (senderAccounts.length) {
+            const key = email.prospect_id || email.contact_id;
+            if (prospectSenderMap[key]) {
+                sender = prospectSenderMap[key];
+            }
+            else {
+                const sorted = [...senderAccounts].sort((a, b) => (senderCounts[a] || 0) - (senderCounts[b] || 0));
+                sender = sorted[0];
+                prospectSenderMap[key] = sender;
+            }
+            senderCounts[sender] = (senderCounts[sender] || 0) + 1;
+        }
         await supabase.from("emails").update({
             scheduled_for: scheduled.toISOString(),
             send_status: "scheduled",
+            sent_from: sender,
         }).eq("id", email.id);
     }
     await supabase.from("sequences").update({
@@ -382,7 +418,7 @@ server.tool("start_sequence", "Start a sequence — schedules all approved email
     return {
         content: [{
                 type: "text",
-                text: `Sequence started! ${emails.length} emails scheduled.\n\nSchedule:\n${scheduleLines.join("\n")}`,
+                text: `Sequence started! ${emails.length} emails scheduled.\nSender accounts: ${senderAccounts.join(", ") || "default"}\n\nSchedule:\n${scheduleLines.join("\n")}`,
             }],
     };
 });
