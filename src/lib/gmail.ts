@@ -27,16 +27,46 @@ export function getAuthUrl() {
   })
 }
 
-export async function getGmailClient() {
+export async function getGmailClient(forEmail?: string) {
   const supabase = createAdminClient()
-  const { data } = await supabase
-    .from('settings')
-    .select('value')
-    .eq('key', 'gmail_tokens')
-    .single()
+
+  let data: { key: string; value: unknown } | null = null
+
+  if (forEmail) {
+    // Find the account matching this email
+    const { data: allTokens } = await supabase
+      .from('settings')
+      .select('key, value')
+      .like('key', 'gmail_tokens%')
+
+    for (const row of (allTokens || [])) {
+      const val = row.value as { email?: string }
+      if (val.email === forEmail) {
+        data = row
+        break
+      }
+      // Also check aliases
+      const aliases = (row.value as { aliases?: string[] }).aliases || []
+      if (aliases.includes(forEmail)) {
+        data = row
+        break
+      }
+    }
+  }
+
+  if (!data) {
+    // Fall back to primary account
+    const { data: primary } = await supabase
+      .from('settings')
+      .select('key, value')
+      .eq('key', 'gmail_tokens')
+      .single()
+    data = primary
+  }
 
   if (!data?.value) throw new Error('Gmail not connected')
 
+  const settingsKey = data.key
   const tokens = data.value as {
     access_token: string
     refresh_token: string
@@ -59,7 +89,7 @@ export async function getGmailClient() {
     if (newTokens.refresh_token) updated.refresh_token = newTokens.refresh_token
 
     await supabase.from('settings').upsert({
-      key: 'gmail_tokens',
+      key: settingsKey,
       value: updated,
     })
   })
@@ -125,7 +155,7 @@ export async function sendEmail({
   threadId?: string
   fromAlias?: string
 }) {
-  const { gmail, email: senderEmail } = await getGmailClient()
+  const { gmail, email: senderEmail } = await getGmailClient(fromAlias)
   const sendFrom = fromAlias || senderEmail
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
 

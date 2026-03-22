@@ -74,24 +74,23 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
   const fetchData = useCallback(async () => {
     const supabase = createClient()
 
-    // Load Gmail accounts (primary + aliases)
+    // Load all Gmail accounts (supports multiple)
     const { data: gmailData } = await supabase
       .from("settings")
       .select("value")
-      .eq("key", "gmail_tokens")
-      .single()
+      .like("key", "gmail_tokens%")
 
-    if (gmailData?.value) {
-      const tokens = gmailData.value as { email?: string; aliases?: string[] }
-      const accounts: string[] = []
-      if (tokens.email) accounts.push(tokens.email)
+    const accounts: string[] = []
+    for (const row of (gmailData || [])) {
+      const tokens = row.value as { email?: string; aliases?: string[] }
+      if (tokens.email && !accounts.includes(tokens.email)) accounts.push(tokens.email)
       if (tokens.aliases) {
         for (const alias of tokens.aliases) {
           if (!accounts.includes(alias)) accounts.push(alias)
         }
       }
-      setAvailableAccounts(accounts)
     }
+    setAvailableAccounts(accounts)
 
     // Load campaign send_settings
     const { data: campaign } = await supabase

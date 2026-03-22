@@ -72,9 +72,7 @@ function SettingsContent() {
   const [timezone, setTimezone] = useState("America/Sao_Paulo")
   const [sendDays, setSendDays] = useState<string[]>(["1", "2", "3", "4", "5"]) // Mon-Fri default
   const [signature, setSignature] = useState("")
-  const [gmailConnected, setGmailConnected] = useState(false)
-  const [gmailEmail, setGmailEmail] = useState("")
-  const [gmailAliases, setGmailAliases] = useState<string[]>([])
+  const [gmailAccounts, setGmailAccounts] = useState<{ email: string; aliases: string[] }[]>([])
   const [loadingAliases, setLoadingAliases] = useState(false)
 
   useEffect(() => {
@@ -90,19 +88,22 @@ function SettingsContent() {
   const loadSettings = async () => {
     const supabase = createClient()
 
-    // Load Gmail status
+    // Load Gmail accounts (supports multiple)
     const { data: gmailData } = await supabase
       .from("settings")
-      .select("value")
-      .eq("key", "gmail_tokens")
-      .single()
+      .select("key, value")
+      .like("key", "gmail_tokens%")
 
-    if (gmailData?.value) {
-      const tokens = gmailData.value as { email?: string; timezone?: string; aliases?: string[] }
-      setGmailConnected(true)
-      setGmailEmail(tokens.email || "")
-      if (tokens.timezone) setTimezone(tokens.timezone)
-      if (tokens.aliases) setGmailAliases(tokens.aliases)
+    if (gmailData?.length) {
+      const accounts: { email: string; aliases: string[] }[] = []
+      for (const row of gmailData) {
+        const tokens = row.value as { email?: string; timezone?: string; aliases?: string[] }
+        if (tokens.email) {
+          accounts.push({ email: tokens.email, aliases: tokens.aliases || [] })
+          if (tokens.timezone) setTimezone(tokens.timezone)
+        }
+      }
+      setGmailAccounts(accounts)
     }
 
     // Load API keys
@@ -189,13 +190,23 @@ function SettingsContent() {
     window.location.href = "/api/auth/google"
   }
 
-  const disconnectGmail = async () => {
+  const disconnectGmail = async (email: string) => {
     const supabase = createClient()
-    await supabase.from("settings").delete().eq("key", "gmail_tokens")
-    setGmailConnected(false)
-    setGmailEmail("")
-    setGmailAliases([])
-    toast.success("Gmail disconnected")
+    // Find the key for this account
+    const { data } = await supabase
+      .from("settings")
+      .select("key, value")
+      .like("key", "gmail_tokens%")
+
+    for (const row of (data || [])) {
+      const tokens = row.value as { email?: string }
+      if (tokens.email === email) {
+        await supabase.from("settings").delete().eq("key", row.key)
+        break
+      }
+    }
+    setGmailAccounts(prev => prev.filter(a => a.email !== email))
+    toast.success(`${email} disconnected`)
   }
 
   const fetchAliases = async () => {
@@ -204,7 +215,8 @@ function SettingsContent() {
       const res = await fetch("/api/gmail/aliases")
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
-      setGmailAliases(data.aliases || [])
+      // Reload settings to pick up aliases
+      loadSettings()
       toast.success(`Found ${data.aliases?.length || 0} aliases`)
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to fetch aliases")
@@ -250,55 +262,52 @@ function SettingsContent() {
           <CardDescription>Connect your Gmail account to send emails.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          {gmailConnected ? (
-            <>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <CheckCircle className="h-5 w-5 text-green-500" />
-                  <span>Connected as <strong>{gmailEmail}</strong></span>
-                  <Badge variant="default" className="bg-green-100 text-green-700 border-green-200">Connected</Badge>
-                </div>
-                <Button variant="outline" onClick={disconnectGmail}>Disconnect</Button>
-              </div>
-
-              {/* Aliases */}
-              <Separator />
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <Label className="text-sm font-medium">Send-As Aliases</Label>
-                    <p className="text-xs text-gray-500 mt-0.5">
-                      Different email addresses you can send from. Assign them to campaigns.
-                    </p>
+          {gmailAccounts.length > 0 && (
+            <div className="space-y-3">
+              {gmailAccounts.map(account => (
+                <div key={account.email} className="border rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle className="h-5 w-5 text-green-500" />
+                      <span className="font-medium">{account.email}</span>
+                      <Badge variant="default" className="bg-green-100 text-green-700 border-green-200 text-xs">Connected</Badge>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={() => disconnectGmail(account.email)}>
+                      Disconnect
+                    </Button>
                   </div>
-                  <Button variant="outline" size="sm" onClick={fetchAliases} disabled={loadingAliases}>
-                    {loadingAliases ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Mail className="mr-2 h-4 w-4" />}
-                    Fetch Aliases
-                  </Button>
-                </div>
-                {gmailAliases.length > 0 ? (
-                  <div className="space-y-2">
-                    {gmailAliases.map(alias => (
-                      <div key={alias} className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-lg text-sm">
-                        <Mail className="h-4 w-4 text-gray-400" />
-                        <span>{alias}</span>
+                  {account.aliases.length > 0 && (
+                    <div className="pl-7">
+                      <p className="text-xs text-gray-400 mb-1.5">Aliases</p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {account.aliases.filter(a => a !== account.email).map(alias => (
+                          <span key={alias} className="text-xs px-2 py-1 bg-gray-50 rounded text-gray-600">
+                            {alias}
+                          </span>
+                        ))}
                       </div>
-                    ))}
-                    <p className="text-xs text-gray-400">
-                      To use an alias, set it as the sending account in a campaign.
-                    </p>
-                  </div>
-                ) : (
-                  <p className="text-sm text-gray-400">
-                    Click &quot;Fetch Aliases&quot; to load your Gmail send-as addresses.
-                  </p>
-                )}
-              </div>
-            </>
-          ) : (
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="flex items-center gap-3">
             <Button variant="outline" onClick={connectGmail}>
-              <Mail className="mr-2 h-4 w-4" /> Connect Gmail Account
+              <Mail className="mr-2 h-4 w-4" /> {gmailAccounts.length > 0 ? "Add Another Account" : "Connect Gmail Account"}
             </Button>
+            {gmailAccounts.length > 0 && (
+              <Button variant="outline" size="sm" onClick={fetchAliases} disabled={loadingAliases}>
+                {loadingAliases ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                Refresh Aliases
+              </Button>
+            )}
+          </div>
+          {gmailAccounts.length > 0 && (
+            <p className="text-xs text-gray-400">
+              Connect multiple accounts to distribute sending across them. Configure per campaign in Campaign Settings.
+            </p>
           )}
         </CardContent>
       </Card>

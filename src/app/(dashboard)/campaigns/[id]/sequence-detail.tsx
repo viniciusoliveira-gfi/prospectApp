@@ -40,6 +40,7 @@ interface ContactEmail {
   replied_at: string | null
   reply_snippet: string | null
   gmail_message_id: string | null
+  sent_from: string | null
   error_message: string | null
 }
 
@@ -439,6 +440,11 @@ export function SequenceDetail({ sequenceId, sequenceName, onBack }: SequenceDet
                     <div className={`px-4 py-2 flex items-center justify-between border-t ${isSent ? "bg-green-50" : "bg-gray-50"}`}>
                       <div className="flex items-center gap-3">
                         <EmailStatusBadge status={email.send_status} approval={email.approval_status} />
+                        {email.sent_from && (
+                          <span className="text-xs text-gray-500">
+                            via {email.sent_from}
+                          </span>
+                        )}
                         {email.sent_at && (
                           <span className="text-xs text-gray-400">
                             {new Date(email.sent_at).toLocaleString()}
