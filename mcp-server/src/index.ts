@@ -1257,6 +1257,30 @@ server.tool(
   }
 );
 
+server.tool(
+  "recalculate_sequence_schedule",
+  "Recalculate email schedules for a sequence based on current settings (sender accounts, daily limits, send days). Use after changing campaign or global settings.",
+  {
+    sequence_id: z.string(),
+  },
+  async ({ sequence_id }) => {
+    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
+    try {
+      const res = await fetch(`${appUrl}/api/sequences/${sequence_id}/recalculate`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) return { content: [{ type: "text", text: `Error: ${data.error || "Recalculation failed"}` }] };
+      return {
+        content: [{
+          type: "text",
+          text: `Schedule recalculated: ${data.rescheduled} emails rescheduled.\nDaily capacity: ${data.daily_capacity} (${data.accounts} accounts × ${data.limit_per_account}/day)\n${data.schedule?.map((s: { step: number; day: string; count: number }) => `Step ${s.step}: ${s.count} emails, last day: ${s.day}`).join("\n") || ""}`,
+        }],
+      };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : "Unknown error"}` }] };
+    }
+  }
+);
+
 // ============================================================
 // PROSPECT RESEARCH DOSSIERS
 // ============================================================

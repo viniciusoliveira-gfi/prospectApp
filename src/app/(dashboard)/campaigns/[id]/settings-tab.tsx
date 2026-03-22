@@ -212,8 +212,29 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
       .update({ send_settings: settings })
       .eq("id", campaignId)
 
-    if (error) toast.error("Failed to save settings")
-    else toast.success("Campaign settings saved")
+    if (error) { toast.error("Failed to save settings"); setSaving(false); return }
+
+    // Recalculate schedules for all active sequences in this campaign
+    const { data: activeSeqs } = await supabase
+      .from("sequences")
+      .select("id")
+      .eq("campaign_id", campaignId)
+      .eq("status", "active")
+
+    let rescheduled = 0
+    for (const seq of (activeSeqs || [])) {
+      try {
+        const res = await fetch(`/api/sequences/${seq.id}/recalculate`, { method: "POST" })
+        const data = await res.json()
+        if (data.rescheduled) rescheduled += data.rescheduled
+      } catch { /* best-effort */ }
+    }
+
+    if (rescheduled > 0) {
+      toast.success(`Settings saved. ${rescheduled} emails rescheduled.`)
+    } else {
+      toast.success("Campaign settings saved")
+    }
     setSaving(false)
   }
 

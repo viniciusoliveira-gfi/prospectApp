@@ -43,7 +43,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
   const [loading, setLoading] = useState(true)
   const [addOpen, setAddOpen] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Add prospect form
@@ -153,19 +152,7 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
     }
   }
 
-  const toggleSelect = (id: string) => {
-    setSelectedIds(prev => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
-  }
 
-  const toggleSelectAll = () => {
-    if (selectedIds.size === prospects.length) setSelectedIds(new Set())
-    else setSelectedIds(new Set(prospects.map(p => p.id)))
-  }
 
   if (loading) return <Skeleton className="h-96 w-full" />
 
@@ -194,14 +181,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[40px]">
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.size === prospects.length}
-                    onChange={toggleSelectAll}
-                    className="rounded"
-                  />
-                </TableHead>
                 <TableHead>Company</TableHead>
                 <TableHead>Domain</TableHead>
                 <TableHead>Industry</TableHead>
@@ -218,14 +197,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
                     className="cursor-pointer hover:bg-gray-50"
                     onClick={() => setExpandedId(expandedId === prospect.id ? null : prospect.id)}
                   >
-                    <TableCell onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={selectedIds.has(prospect.id)}
-                        onChange={() => toggleSelect(prospect.id)}
-                        className="rounded"
-                      />
-                    </TableCell>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2">
                         {prospect.company_name}
@@ -266,7 +237,7 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
                   </TableRow>
                   {expandedId === prospect.id && (
                     <TableRow key={`${prospect.id}-detail`}>
-                      <TableCell colSpan={7} className="bg-gray-50/50">
+                      <TableCell colSpan={6} className="bg-gray-50/50">
                         <div className="p-4 space-y-4">
                           {/* Company details grid */}
                           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
