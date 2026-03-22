@@ -173,8 +173,28 @@ function SettingsContent() {
         send_days: JSON.stringify(sendDays),
       },
     })
-    if (error) toast.error("Failed to save")
-    else toast.success("Sending defaults saved")
+    if (error) { toast.error("Failed to save"); return }
+
+    // Recalculate all active sequences across all campaigns
+    const { data: activeSeqs } = await supabase
+      .from("sequences")
+      .select("id")
+      .eq("status", "active")
+
+    let rescheduled = 0
+    for (const seq of (activeSeqs || [])) {
+      try {
+        const res = await fetch(`/api/sequences/${seq.id}/recalculate`, { method: "POST" })
+        const data = await res.json()
+        if (data.rescheduled) rescheduled += data.rescheduled
+      } catch { /* best-effort */ }
+    }
+
+    if (rescheduled > 0) {
+      toast.success(`Sending defaults saved. ${rescheduled} emails rescheduled.`)
+    } else {
+      toast.success("Sending defaults saved")
+    }
   }
 
   const saveSignature = async () => {

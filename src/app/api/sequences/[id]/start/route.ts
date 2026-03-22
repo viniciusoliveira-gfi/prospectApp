@@ -108,28 +108,19 @@ export async function POST(
     return chosen
   }
 
-  // Calculate scheduled_for and assign sender for each email
-  const now = new Date()
-  const stepDelayMap = Object.fromEntries(steps.map(s => [s.id, s.delay_days]))
-
+  // Assign senders to all emails (same sender per prospect, evenly distributed)
   for (const email of emails) {
     const prospectKey = email.prospect_id || email.contact_id
     const sender = assignSender(prospectKey)
 
     await supabase
       .from('emails')
-      .update({
-        scheduled_for: calculateScheduledFor({
-          startTime: now,
-          delayDays: stepDelayMap[email.sequence_step_id],
-        }).toISOString(),
-        send_status: 'scheduled' as const,
-        sent_from: sender,
-      })
+      .update({ sent_from: sender })
       .eq('id', email.id)
   }
 
   // Set sequence to active
+  const now = new Date()
   await supabase
     .from('sequences')
     .update({
@@ -138,17 +129,34 @@ export async function POST(
     })
     .eq('id', sequenceId)
 
+  // Smart schedule: distribute emails across days respecting daily limits
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').trim()
+  let scheduleResult = null
+  try {
+    const res = await fetch(`${appUrl}/api/sequences/${sequenceId}/recalculate`, { method: 'POST' })
+    scheduleResult = await res.json()
+  } catch {
+    // Fallback: basic scheduling if recalculate fails
+    const stepDelayMap = Object.fromEntries(steps.map(s => [s.id, s.delay_days]))
+    for (const email of emails) {
+      await supabase
+        .from('emails')
+        .update({
+          scheduled_for: calculateScheduledFor({
+            startTime: now,
+            delayDays: stepDelayMap[email.sequence_step_id],
+          }).toISOString(),
+          send_status: 'scheduled' as const,
+        })
+        .eq('id', email.id)
+    }
+  }
+
   return NextResponse.json({
     message: 'Sequence started',
     emails_scheduled: emails.length,
     sender_accounts: senderAccounts,
-    schedule: steps.map(step => ({
-      step_number: step.step_number,
-      delay_days: step.delay_days,
-      scheduled_for: calculateScheduledFor({
-        startTime: now,
-        delayDays: step.delay_days,
-      }).toISOString(),
-    })),
+    schedule: scheduleResult?.schedule || null,
+    daily_capacity: scheduleResult?.daily_capacity || null,
   })
 }

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react"
 import {
   Plus, Loader2, Trash2, ListOrdered, GripVertical,
-  Play, Pause, RotateCcw, CheckCircle2, Clock, AlertCircle,
+  Play, Pause, RotateCcw, CheckCircle2, AlertCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -371,18 +371,32 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
                     </div>
                   )}
 
-                  {/* Step progress for active/paused/completed sequences */}
-                  {seqSteps.length > 0 && (seq.status === "active" || seq.status === "paused" || seq.status === "completed") && (
-                    <div className="space-y-2">
-                      {seqSteps.map(step => (
-                        <div key={step.id} className="flex items-center gap-3 text-sm">
-                          <Clock className="h-3 w-3 text-muted-foreground" />
-                          <span className="text-muted-foreground w-16">
-                            Day {step.delay_days}
-                          </span>
-                          <span className="truncate flex-1">
-                            Step {step.step_number}: {step.subject_template}
-                          </span>
+                  {/* Step timeline */}
+                  {seqSteps.length > 0 && (
+                    <div className="flex items-center gap-0 my-3 overflow-x-auto">
+                      {seqSteps.map((step, i) => (
+                        <div key={step.id} className="flex items-center">
+                          {/* Step dot */}
+                          <div className="flex flex-col items-center">
+                            <div className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-medium border-2 ${
+                              seq.status === "completed" ? "bg-green-50 border-green-400 text-green-700" :
+                              seq.status === "active" ? "bg-blue-50 border-blue-400 text-blue-700" :
+                              "bg-gray-50 border-gray-300 text-gray-600"
+                            }`}>
+                              {step.step_number}
+                            </div>
+                            <span className="text-[10px] text-gray-400 mt-0.5">Day {step.delay_days}</span>
+                          </div>
+                          {/* Connector line with day gap */}
+                          {i < seqSteps.length - 1 && (
+                            <div className="flex items-center mx-1">
+                              <div className="h-px w-6 bg-gray-300" />
+                              <span className="text-[10px] text-gray-400 px-1 bg-white">
+                                +{seqSteps[i + 1].delay_days - step.delay_days}d
+                              </span>
+                              <div className="h-px w-6 bg-gray-300" />
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
