@@ -746,7 +746,7 @@ server.tool(
     const lines = data.map(e => {
       const contact = e.contacts as unknown as { first_name: string; last_name: string; email: string };
       const prospect = e.prospects as unknown as { company_name: string };
-      return `---\n**To:** ${contact?.first_name} ${contact?.last_name} at ${prospect?.company_name}\n**Subject:** ${e.subject}\n**Status:** ${e.approval_status} / ${e.send_status}\n**Opens:** ${e.open_count} | **Replied:** ${e.replied_at ? "Yes" : "No"}\n**ID:** ${e.id}`;
+      return `---\n**To:** ${contact?.first_name} ${contact?.last_name} at ${prospect?.company_name}\n**Subject:** ${e.subject}\n**Status:** ${e.approval_status} / ${e.send_status}${e.sent_from ? ` | **From:** ${e.sent_from}` : ""}\n**Opens:** ${e.open_count} | **Replied:** ${e.replied_at ? "Yes" : "No"}\n**ID:** ${e.id}`;
     });
     return { content: [{ type: "text", text: `${data.length} emails:\n${lines.join("\n\n")}` }] };
   }
@@ -815,6 +815,220 @@ server.tool(
 );
 
 // ============================================================
+// CAMPAIGN SEND SETTINGS
+// ============================================================
+
+server.tool(
+  "get_campaign_settings",
+  "Get a campaign's send settings: sender accounts, tracking, sending window, timezone.",
+  {
+    campaign_id: z.string(),
+  },
+  async ({ campaign_id }) => {
+    const { data, error } = await supabase
+      .from("campaigns")
+      .select("name, send_settings, sending_account, daily_send_limit")
+      .eq("id", campaign_id)
+      .single();
+
+    if (error || !data) return { content: [{ type: "text", text: "Campaign not found." }] };
+
+    const ss = data.send_settings as {
+      sender_accounts?: string[];
+      track_opens?: boolean;
+      send_days?: string[];
+      send_hours_start?: number;
+      send_hours_end?: number;
+      timezone?: string;
+    } | null;
+
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const sendDayNames = (ss?.send_days || ["1","2","3","4","5"]).map(d => days[parseInt(d)]).join(", ");
+
+    return {
+      content: [{
+        type: "text",
+        text: `**${data.name}** settings:\n` +
+          `Sender accounts: ${ss?.sender_accounts?.length ? ss.sender_accounts.join(", ") : data.sending_account || "default"}\n` +
+          `Track opens: ${ss?.track_opens !== false ? "Yes" : "No"}\n` +
+          `Send days: ${sendDayNames}\n` +
+          `Send hours: ${ss?.send_hours_start ?? 9}:00 - ${ss?.send_hours_end ?? 18}:00\n` +
+          `Timezone: ${ss?.timezone || "America/Sao_Paulo"}\n` +
+          `Daily limit: ${data.daily_send_limit}`,
+      }],
+    };
+  }
+);
+
+server.tool(
+  "update_campaign_settings",
+  "Update a campaign's send settings: sender accounts, tracking, sending window.",
+  {
+    campaign_id: z.string(),
+    sender_accounts: z.array(z.string()).optional().describe("Email addresses to send from (distribute evenly)"),
+    track_opens: z.boolean().optional().describe("Track email opens with pixel"),
+    send_days: z.array(z.string()).optional().describe("Days to send (0=Sun, 1=Mon, ..., 6=Sat). Default: ['1','2','3','4','5']"),
+    send_hours_start: z.number().optional().describe("Start hour (0-23, default 9)"),
+    send_hours_end: z.number().optional().describe("End hour (0-23, default 18)"),
+    timezone: z.string().optional().describe("IANA timezone (e.g., America/Sao_Paulo)"),
+  },
+  async ({ campaign_id, ...updates }) => {
+    // Get existing settings
+    const { data: campaign } = await supabase
+      .from("campaigns")
+      .select("send_settings")
+      .eq("id", campaign_id)
+      .single();
+
+    if (!campaign) return { content: [{ type: "text", text: "Campaign not found." }] };
+
+    const existing = (campaign.send_settings || {}) as Record<string, unknown>;
+    const newSettings = { ...existing };
+
+    if (updates.sender_accounts !== undefined) newSettings.sender_accounts = updates.sender_accounts;
+    if (updates.track_opens !== undefined) newSettings.track_opens = updates.track_opens;
+    if (updates.send_days !== undefined) newSettings.send_days = updates.send_days;
+    if (updates.send_hours_start !== undefined) newSettings.send_hours_start = updates.send_hours_start;
+    if (updates.send_hours_end !== undefined) newSettings.send_hours_end = updates.send_hours_end;
+    if (updates.timezone !== undefined) newSettings.timezone = updates.timezone;
+
+    const { error } = await supabase
+      .from("campaigns")
+      .update({ send_settings: newSettings })
+      .eq("id", campaign_id);
+
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    return { content: [{ type: "text", text: "Campaign settings updated." }] };
+  }
+);
+
+// ============================================================
+// GMAIL ACCOUNTS
+// ============================================================
+
+server.tool(
+  "list_gmail_accounts",
+  "List all connected Gmail accounts with their aliases. Use this to see available sender addresses.",
+  {},
+  async () => {
+    const { data } = await supabase
+      .from("settings")
+      .select("key, value")
+      .like("key", "gmail_tokens%");
+
+    if (!data?.length) return { content: [{ type: "text", text: "No Gmail accounts connected." }] };
+
+    const lines = data.map(row => {
+      const tokens = row.value as { email?: string; aliases?: string[]; timezone?: string };
+      const aliases = (tokens.aliases || []).filter(a => a !== tokens.email);
+      return `- **${tokens.email}** (${tokens.timezone || "no timezone"})\n` +
+        (aliases.length ? `  Aliases: ${aliases.join(", ")}` : "  No aliases");
+    });
+
+    return { content: [{ type: "text", text: `${data.length} Gmail account(s):\n${lines.join("\n")}` }] };
+  }
+);
+
+// ============================================================
+// SEND & REPLY TRIGGERS
+// ============================================================
+
+server.tool(
+  "trigger_send",
+  "Manually trigger the email send processor. This sends any scheduled emails that are due now.",
+  {},
+  async () => {
+    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
+    try {
+      const res = await fetch(`${appUrl}/api/send/process`, { method: "POST" });
+      const data = await res.json();
+      return { content: [{ type: "text", text: `Send processor result: ${JSON.stringify(data)}` }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Failed to trigger send: ${err instanceof Error ? err.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+server.tool(
+  "trigger_reply_check",
+  "Manually check Gmail for replies to sent emails. Updates contact status and skips remaining steps.",
+  {},
+  async () => {
+    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
+    try {
+      const res = await fetch(`${appUrl}/api/gmail/check-replies`, { method: "POST" });
+      const data = await res.json();
+      return { content: [{ type: "text", text: `Reply check result: ${JSON.stringify(data)}` }] };
+    } catch (err) {
+      return { content: [{ type: "text", text: `Failed to check replies: ${err instanceof Error ? err.message : "Unknown error"}` }] };
+    }
+  }
+);
+
+// ============================================================
+// EMAIL DETAIL
+// ============================================================
+
+server.tool(
+  "get_email_detail",
+  "Get full details of a specific email including body, status, tracking, and reply info.",
+  {
+    email_id: z.string(),
+  },
+  async ({ email_id }) => {
+    const { data, error } = await supabase
+      .from("emails")
+      .select("*, contacts(first_name, last_name, email), prospects(company_name)")
+      .eq("id", email_id)
+      .single();
+
+    if (error || !data) return { content: [{ type: "text", text: "Email not found." }] };
+
+    const contact = data.contacts as unknown as { first_name: string; last_name: string; email: string };
+    const prospect = data.prospects as unknown as { company_name: string };
+
+    return {
+      content: [{
+        type: "text",
+        text: `**To:** ${contact?.first_name} ${contact?.last_name} (${contact?.email}) at ${prospect?.company_name}\n` +
+          `**Subject:** ${data.subject}\n` +
+          `**Approval:** ${data.approval_status} | **Send:** ${data.send_status}\n` +
+          `**Sent from:** ${data.sent_from || "not yet sent"}\n` +
+          `**Scheduled:** ${data.scheduled_for ? new Date(data.scheduled_for).toLocaleString() : "—"}\n` +
+          `**Sent at:** ${data.sent_at ? new Date(data.sent_at).toLocaleString() : "—"}\n` +
+          `**Opens:** ${data.open_count} | **Replied:** ${data.replied_at ? new Date(data.replied_at).toLocaleString() : "No"}\n` +
+          `${data.reply_snippet ? `**Reply:** ${data.reply_snippet}\n` : ""}` +
+          `${data.error_message ? `**Error:** ${data.error_message}\n` : ""}` +
+          `\n---\n${data.body}`,
+      }],
+    };
+  }
+);
+
+// ============================================================
+// DELETE SEQUENCE
+// ============================================================
+
+server.tool(
+  "delete_sequence",
+  "Delete a sequence and all its steps and emails. Only works for draft sequences.",
+  {
+    sequence_id: z.string(),
+  },
+  async ({ sequence_id }) => {
+    const { data: seq } = await supabase.from("sequences").select("status, name").eq("id", sequence_id).single();
+    if (!seq) return { content: [{ type: "text", text: "Sequence not found." }] };
+    if (seq.status !== "draft") {
+      return { content: [{ type: "text", text: `Cannot delete: sequence is "${seq.status}". Only draft sequences can be deleted.` }] };
+    }
+
+    const { error } = await supabase.from("sequences").delete().eq("id", sequence_id);
+    if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    return { content: [{ type: "text", text: `Sequence "${seq.name}" deleted.` }] };
+  }
+);
+
+// ============================================================
 // ANALYTICS & REPORTING
 // ============================================================
 
@@ -874,24 +1088,49 @@ server.tool(
 
 server.tool(
   "get_activity",
-  "Get recent activity log",
+  "Get recent activity log with contact, company, campaign, and email details.",
   {
     limit: z.number().optional().describe("Max entries (default 10)"),
+    campaign_id: z.string().optional().describe("Filter by campaign"),
   },
-  async ({ limit }) => {
-    const { data, error } = await supabase
+  async ({ limit, campaign_id }) => {
+    let query = supabase
       .from("activity_log")
-      .select("*")
+      .select("*, contacts(first_name, last_name, email), prospects(company_name), emails(subject)")
       .order("created_at", { ascending: false })
       .limit(limit || 10);
+
+    if (campaign_id) query = query.eq("campaign_id", campaign_id);
+
+    const { data, error } = await query;
 
     if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
     if (!data?.length) return { content: [{ type: "text", text: "No activity yet." }] };
 
-    const lines = data.map(a =>
-      `- ${a.action.replace(/_/g, " ")} — ${new Date(a.created_at).toLocaleString()}`
-    );
-    return { content: [{ type: "text", text: lines.join("\n") }] };
+    // Get campaign names
+    const cIds = Array.from(new Set(data.filter(a => a.campaign_id).map(a => a.campaign_id)));
+    const { data: campaigns } = cIds.length
+      ? await supabase.from("campaigns").select("id, name").in("id", cIds)
+      : { data: [] };
+    const cMap = Object.fromEntries((campaigns || []).map(c => [c.id, c.name]));
+
+    const lines = data.map(a => {
+      const contact = a.contacts as unknown as { first_name: string; last_name: string; email: string } | null;
+      const prospect = a.prospects as unknown as { company_name: string } | null;
+      const email = a.emails as unknown as { subject: string } | null;
+      const details = a.details as Record<string, unknown> | null;
+      const campaign = a.campaign_id ? cMap[a.campaign_id] : null;
+
+      let line = `- **${a.action.replace(/_/g, " ")}**`;
+      if (contact) line += ` → ${contact.first_name} ${contact.last_name} (${contact.email})`;
+      if (prospect) line += ` at ${prospect.company_name}`;
+      if (campaign) line += ` [${campaign}]`;
+      if (email?.subject) line += ` — "${email.subject}"`;
+      if (details?.snippet) line += `\n  Reply: "${details.snippet}"`;
+      line += `\n  ${new Date(a.created_at).toLocaleString()}`;
+      return line;
+    });
+    return { content: [{ type: "text", text: lines.join("\n\n") }] };
   }
 );
 
@@ -901,22 +1140,31 @@ server.tool(
 
 server.tool(
   "get_settings",
-  "Get app settings (Gmail connection, sending config)",
+  "Get app settings (Gmail accounts, sending config, timezone, send days)",
   {},
   async () => {
     const { data } = await supabase.from("settings").select("*");
-    const settings = Object.fromEntries((data || []).map(s => [s.key, s.value]));
 
-    const gmail = settings.gmail_tokens as { email?: string } | undefined;
-    const sending = settings.sending_defaults as Record<string, string> | undefined;
+    // Gmail accounts
+    const gmailRows = (data || []).filter(s => s.key.startsWith("gmail_tokens"));
+    const gmailAccounts = gmailRows.map(r => {
+      const t = r.value as { email?: string; aliases?: string[] };
+      return t.email || "unknown";
+    });
+
+    const sending = (data || []).find(s => s.key === "sending_defaults")?.value as Record<string, string> | undefined;
+    const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const sendDays = sending?.send_days ? JSON.parse(sending.send_days).map((d: string) => days[parseInt(d)]).join(", ") : "Mon-Fri";
 
     return {
       content: [{
         type: "text",
-        text: `Gmail: ${gmail?.email ? `Connected (${gmail.email})` : "Not connected"}\n` +
-          `Daily limit: ${sending?.daily_limit || "25"}\n` +
-          `Send interval: ${sending?.send_interval || "60"} min\n` +
-          `Hours: ${sending?.hours_start || "9"}:00 - ${sending?.hours_end || "18"}:00`,
+        text: `**Gmail accounts:** ${gmailAccounts.length ? gmailAccounts.join(", ") : "None connected"}\n` +
+          `**Daily limit:** ${sending?.daily_limit || "25"}\n` +
+          `**Send interval:** ${sending?.send_interval || "60"} min\n` +
+          `**Hours:** ${sending?.hours_start || "9"}:00 - ${sending?.hours_end || "18"}:00\n` +
+          `**Send days:** ${sendDays}\n` +
+          `**Timezone:** ${sending?.timezone || "America/Sao_Paulo"}`,
       }],
     };
   }
@@ -924,19 +1172,30 @@ server.tool(
 
 server.tool(
   "update_settings",
-  "Update sending settings",
+  "Update global sending settings (timezone, hours, days, limits)",
   {
     daily_send_limit: z.number().optional(),
     send_interval_minutes: z.number().optional(),
-    sending_hours_start: z.number().optional(),
-    sending_hours_end: z.number().optional(),
+    sending_hours_start: z.number().optional().describe("Hour 0-23"),
+    sending_hours_end: z.number().optional().describe("Hour 0-23"),
+    timezone: z.string().optional().describe("IANA timezone, e.g. America/Sao_Paulo"),
+    send_days: z.array(z.string()).optional().describe("Days to send (0=Sun, 1=Mon, ..., 6=Sat)"),
   },
   async (updates) => {
-    const value: Record<string, string> = {};
+    // Get existing to merge
+    const { data: existing } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "sending_defaults")
+      .single();
+
+    const value: Record<string, string> = (existing?.value as Record<string, string>) || {};
     if (updates.daily_send_limit !== undefined) value.daily_limit = String(updates.daily_send_limit);
     if (updates.send_interval_minutes !== undefined) value.send_interval = String(updates.send_interval_minutes);
     if (updates.sending_hours_start !== undefined) value.hours_start = String(updates.sending_hours_start);
     if (updates.sending_hours_end !== undefined) value.hours_end = String(updates.sending_hours_end);
+    if (updates.timezone !== undefined) value.timezone = updates.timezone;
+    if (updates.send_days !== undefined) value.send_days = JSON.stringify(updates.send_days);
 
     const { error } = await supabase.from("settings").upsert({ key: "sending_defaults", value });
     if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
