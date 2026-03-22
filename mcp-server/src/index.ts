@@ -1462,7 +1462,7 @@ server.tool(
 
 server.tool(
   "get_experiment_results",
-  "Get experiment results with per-variant metrics and statistical significance.",
+  "Get experiment results with per-variant metrics pulled from actual email data.",
   {
     experiment_id: z.string(),
   },
@@ -1475,26 +1475,50 @@ server.tool(
 
     if (!experiment) return { content: [{ type: "text", text: "Experiment not found." }] };
 
-    const { data: assignments } = await supabase
-      .from("experiment_assignments")
-      .select("*")
+    // Pull real metrics from emails table
+    const { data: emails } = await supabase
+      .from("emails")
+      .select("variant_id, send_status, open_count, replied_at, contact_id")
       .eq("experiment_id", experiment_id);
 
-    if (!assignments?.length) return { content: [{ type: "text", text: "No assignments yet." }] };
+    // Also get assignments for contact counts and sentiment
+    const { data: assignments } = await supabase
+      .from("experiment_assignments")
+      .select("variant_id, contact_id, reply_sentiment")
+      .eq("experiment_id", experiment_id);
 
     const variants = (experiment.variants as { variant_id: string; label: string }[]);
-    const variantStats: Record<string, { label: string; contacts: number; sent: number; opened: number; replied: number; positive: number }> = {};
+    const variantStats: Record<string, { label: string; contacts: number; sent: number; opened: number; replied: number; positive: number; uniqueContacts: Set<string> }> = {};
 
     for (const v of variants) {
-      const variantAssignments = assignments.filter(a => a.variant_id === v.variant_id);
+      const assignmentCount = assignments?.filter(a => a.variant_id === v.variant_id).length || 0;
       variantStats[v.variant_id] = {
         label: v.label,
-        contacts: variantAssignments.length,
-        sent: variantAssignments.reduce((sum, a) => sum + a.emails_sent, 0),
-        opened: variantAssignments.reduce((sum, a) => sum + a.emails_opened, 0),
-        replied: variantAssignments.reduce((sum, a) => sum + a.emails_replied, 0),
-        positive: variantAssignments.filter(a => a.reply_sentiment === "positive").length,
+        contacts: assignmentCount,
+        sent: 0, opened: 0, replied: 0, positive: 0,
+        uniqueContacts: new Set(),
       };
+    }
+
+    // Aggregate from actual emails
+    for (const e of (emails || [])) {
+      const vid = e.variant_id;
+      if (!vid || !variantStats[vid]) continue;
+      if (e.send_status === "sent") {
+        variantStats[vid].sent++;
+        if (e.open_count > 0) variantStats[vid].opened++;
+        if (e.replied_at) {
+          variantStats[vid].replied++;
+          variantStats[vid].uniqueContacts.add(e.contact_id);
+        }
+      }
+    }
+
+    // Count positive replies from assignments
+    for (const a of (assignments || [])) {
+      if (a.reply_sentiment === "positive" && variantStats[a.variant_id]) {
+        variantStats[a.variant_id].positive++;
+      }
     }
 
     let text = `**${experiment.name}** [${experiment.status}]\n`;
@@ -1504,11 +1528,13 @@ server.tool(
     for (const [vid, stats] of Object.entries(variantStats)) {
       const openRate = stats.sent > 0 ? Math.round((stats.opened / stats.sent) * 100) : 0;
       const replyRate = stats.sent > 0 ? Math.round((stats.replied / stats.sent) * 100) : 0;
+      const contactReplyRate = stats.contacts > 0 ? Math.round((stats.uniqueContacts.size / stats.contacts) * 100) : 0;
       const sufficientData = stats.contacts >= experiment.min_sample_per_variant;
 
       text += `**Variant ${vid}: ${stats.label}**\n`;
-      text += `  Contacts: ${stats.contacts}/${experiment.min_sample_per_variant} min | Sent: ${stats.sent}\n`;
-      text += `  Open rate: ${openRate}% | Reply rate: ${replyRate}% | Positive: ${stats.positive}\n`;
+      text += `  Contacts: ${stats.contacts}/${experiment.min_sample_per_variant} min | Emails sent: ${stats.sent}\n`;
+      text += `  Open rate: ${openRate}% | Reply rate (emails): ${replyRate}% | Reply rate (contacts): ${contactReplyRate}%\n`;
+      text += `  Positive replies: ${stats.positive}\n`;
       text += `  Data: ${sufficientData ? "✓ Sufficient" : "✗ Need more"}\n\n`;
     }
 

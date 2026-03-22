@@ -8,7 +8,7 @@ export async function POST() {
   // Get all sent emails that haven't been marked as replied
   const { data: sentEmails, error } = await supabase
     .from('emails')
-    .select('id, gmail_thread_id, gmail_message_id, contact_id, prospect_id')
+    .select('id, gmail_thread_id, gmail_message_id, contact_id, prospect_id, experiment_id')
     .eq('send_status', 'sent')
     .is('replied_at', null)
     .not('gmail_thread_id', 'is', null)
@@ -97,6 +97,17 @@ export async function POST() {
                   .in('send_status', ['queued', 'scheduled'])
               }
             }
+          }
+
+          // Update experiment assignment if applicable
+          if (email.experiment_id) {
+            try {
+              await supabase
+                .from('experiment_assignments')
+                .update({ emails_replied: 1 })
+                .eq('experiment_id', email.experiment_id)
+                .eq('contact_id', email.contact_id)
+            } catch { /* best-effort */ }
           }
 
           // Log activity
