@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react"
 import {
-  Plus, Upload, Search, Loader2, ChevronDown, ChevronUp,
-  Trash2, RefreshCw, Building2, Users, Globe, MapPin, Factory,
+  Plus, Upload, Loader2, ChevronDown, ChevronUp,
+  Trash2, Building2, Users, Globe, MapPin, Factory,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
@@ -43,7 +43,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
   const [loading, setLoading] = useState(true)
   const [addOpen, setAddOpen] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  const [researching, setResearching] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -144,46 +143,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
     if (fileInputRef.current) fileInputRef.current.value = ""
   }
 
-  const handleResearchAll = async () => {
-    const ids = selectedIds.size > 0 ? Array.from(selectedIds) : undefined
-    setResearching(true)
-    try {
-      const res = await fetch(`/api/campaigns/${campaignId}/prospects/research`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prospect_ids: ids }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      toast.success(`Research completed for ${data.results?.length || 0} prospects`)
-      fetchProspects()
-    } catch {
-      toast.error("Research failed")
-    }
-    setResearching(false)
-    setSelectedIds(new Set())
-  }
-
-  const handleResearchOne = async (prospectId: string) => {
-    const supabase = createClient()
-    await supabase.from("prospects").update({ ai_research_status: "researching" }).eq("id", prospectId)
-    setProspects(prev => prev.map(p => p.id === prospectId ? { ...p, ai_research_status: "researching" } : p))
-
-    try {
-      const res = await fetch("/api/ai/research", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prospect_id: prospectId }),
-      })
-      if (!res.ok) throw new Error()
-      toast.success("Research completed")
-      fetchProspects()
-    } catch {
-      toast.error("Research failed")
-      fetchProspects()
-    }
-  }
-
   const handleDelete = async (prospectId: string) => {
     const supabase = createClient()
     const { error } = await supabase.from("prospects").delete().eq("id", prospectId)
@@ -220,14 +179,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
           <Upload className="mr-2 h-4 w-4" /> Import CSV
         </Button>
         <input ref={fileInputRef} type="file" accept=".csv" className="hidden" onChange={handleCSVImport} />
-        <Button
-          variant="outline"
-          onClick={handleResearchAll}
-          disabled={researching || prospects.length === 0}
-        >
-          {researching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Search className="mr-2 h-4 w-4" />}
-          {selectedIds.size > 0 ? `Research Selected (${selectedIds.size})` : "Research All"}
-        </Button>
       </div>
 
       {prospects.length === 0 ? (
@@ -302,15 +253,6 @@ export function ProspectsTab({ campaignId }: ProspectsTabProps) {
                     </TableCell>
                     <TableCell onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleResearchOne(prospect.id)}
-                          disabled={prospect.ai_research_status === "researching"}
-                          title="Research"
-                        >
-                          <RefreshCw className="h-4 w-4" />
-                        </Button>
                         <Button
                           variant="ghost"
                           size="icon"

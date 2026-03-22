@@ -703,7 +703,7 @@ server.tool("get_campaign_settings", "Get a campaign's send settings: sender acc
                     `Send days: ${sendDayNames}\n` +
                     `Send hours: ${ss?.send_hours_start ?? 9}:00 - ${ss?.send_hours_end ?? 18}:00\n` +
                     `Timezone: ${ss?.timezone || "America/Sao_Paulo"}\n` +
-                    `Daily limit: ${data.daily_send_limit}`,
+                    `Daily limit per account: ${ss?.daily_limit_per_account || data.daily_send_limit || 25}`,
             }],
     };
 });
@@ -715,6 +715,7 @@ server.tool("update_campaign_settings", "Update a campaign's send settings: send
     send_hours_start: z.number().optional().describe("Start hour (0-23, default 9)"),
     send_hours_end: z.number().optional().describe("End hour (0-23, default 18)"),
     timezone: z.string().optional().describe("IANA timezone (e.g., America/Sao_Paulo)"),
+    daily_limit_per_account: z.number().optional().describe("Max emails per account per day (default 25)"),
 }, async ({ campaign_id, ...updates }) => {
     // Get existing settings
     const { data: campaign } = await supabase
@@ -946,7 +947,7 @@ server.tool("get_settings", "Get app settings (Gmail accounts, sending config, t
         content: [{
                 type: "text",
                 text: `**Gmail accounts:** ${gmailAccounts.length ? gmailAccounts.join(", ") : "None connected"}\n` +
-                    `**Daily limit:** ${sending?.daily_limit || "25"}\n` +
+                    `**Daily limit per account:** ${sending?.daily_limit_per_account || sending?.daily_limit || "25"}\n` +
                     `**Send interval:** ${sending?.send_interval || "60"} min\n` +
                     `**Hours:** ${sending?.hours_start || "9"}:00 - ${sending?.hours_end || "18"}:00\n` +
                     `**Send days:** ${sendDays}\n` +
@@ -955,7 +956,7 @@ server.tool("get_settings", "Get app settings (Gmail accounts, sending config, t
     };
 });
 server.tool("update_settings", "Update global sending settings (timezone, hours, days, limits)", {
-    daily_send_limit: z.number().optional(),
+    daily_limit_per_account: z.number().optional().describe("Max emails per Gmail account per day (default 25)"),
     send_interval_minutes: z.number().optional(),
     sending_hours_start: z.number().optional().describe("Hour 0-23"),
     sending_hours_end: z.number().optional().describe("Hour 0-23"),
@@ -969,8 +970,8 @@ server.tool("update_settings", "Update global sending settings (timezone, hours,
         .eq("key", "sending_defaults")
         .single();
     const value = existing?.value || {};
-    if (updates.daily_send_limit !== undefined)
-        value.daily_limit = String(updates.daily_send_limit);
+    if (updates.daily_limit_per_account !== undefined)
+        value.daily_limit_per_account = String(updates.daily_limit_per_account);
     if (updates.send_interval_minutes !== undefined)
         value.send_interval = String(updates.send_interval_minutes);
     if (updates.sending_hours_start !== undefined)
