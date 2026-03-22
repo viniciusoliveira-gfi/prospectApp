@@ -16,7 +16,7 @@ export async function POST() {
   const accountTimezone = settings.timezone || 'America/Sao_Paulo'
   const hoursStart = parseInt(settings.hours_start || '9')
   const hoursEnd = parseInt(settings.hours_end || '18')
-  const maxPerDay = parseInt(settings.daily_limit || '25')
+  const globalDailyLimitPerAccount = parseInt(settings.daily_limit_per_account || settings.daily_limit || '25')
   const sendDays: string[] = settings.send_days ? JSON.parse(settings.send_days) : ['1', '2', '3', '4', '5']
 
   // Get current time in account timezone
@@ -30,20 +30,22 @@ export async function POST() {
     return NextResponse.json({ message: `Not a sending day (${accountTimezone})`, sent: 0 })
   }
 
-  // Check how many sent today (using account timezone for "today")
+  // Calculate today's start in account timezone for per-account limit checks
   const todayInTz = new Date(tzTime)
   todayInTz.setHours(0, 0, 0, 0)
-  // Convert back to UTC for the query
   const todayStart = new Date(now.getTime() - (tzTime.getTime() - todayInTz.getTime()))
 
-  const { count: sentToday } = await supabase
+  // Get per-account sent counts for today
+  const { data: sentTodayData } = await supabase
     .from('emails')
-    .select('id', { count: 'exact', head: true })
+    .select('sent_from')
     .eq('send_status', 'sent')
     .gte('sent_at', todayStart.toISOString())
 
-  if ((sentToday || 0) >= maxPerDay) {
-    return NextResponse.json({ message: 'Daily send limit reached', sent: 0 })
+  const perAccountSentToday: Record<string, number> = {}
+  for (const e of (sentTodayData || [])) {
+    const sender = e.sent_from || '_default'
+    perAccountSentToday[sender] = (perAccountSentToday[sender] || 0) + 1
   }
 
   // Check sending hours in account timezone
@@ -199,27 +201,37 @@ export async function POST() {
 ${email.body.replace(/\n/g, '<br/>')}
 </div>`
 
-      // Resolve sender from campaign config
+      // Resolve sender — use pre-assigned sent_from or determine from config
       const emailCampaignId = stepInfo ? sequenceCampaignMap[stepInfo.sequence_id] : undefined
       const config = emailCampaignId ? campaignConfigs[emailCampaignId] : undefined
-      let fromAlias: string | undefined
+      const campaignLimit = (config as unknown as { daily_limit_per_account?: number })?.daily_limit_per_account
+      const dailyLimit = campaignLimit || globalDailyLimitPerAccount
+      let fromAlias: string | undefined = email.sent_from || undefined
 
-      if (config && config.sender_accounts.length > 0) {
-        // Multi-account: same sender per prospect
-        const prospectKey = email.prospect_id || email.contact_id
-        if (prospectSenderMap[prospectKey]) {
-          fromAlias = prospectSenderMap[prospectKey]
-        } else {
-          // Pick the sender with fewest sends for even distribution
-          const sorted = [...config.sender_accounts].sort(
-            (a, b) => (senderSentCount[a] || 0) - (senderSentCount[b] || 0)
-          )
-          fromAlias = sorted[0]
-          prospectSenderMap[prospectKey] = fromAlias
+      if (!fromAlias) {
+        if (config && config.sender_accounts.length > 0) {
+          const prospectKey = email.prospect_id || email.contact_id
+          if (prospectSenderMap[prospectKey]) {
+            fromAlias = prospectSenderMap[prospectKey]
+          } else {
+            const sorted = [...config.sender_accounts].sort(
+              (a, b) => (senderSentCount[a] || 0) - (senderSentCount[b] || 0)
+            )
+            fromAlias = sorted[0]
+            prospectSenderMap[prospectKey] = fromAlias
+          }
+          senderSentCount[fromAlias] = (senderSentCount[fromAlias] || 0) + 1
+        } else if (config?.sending_account) {
+          fromAlias = config.sending_account
         }
-        senderSentCount[fromAlias] = (senderSentCount[fromAlias] || 0) + 1
-      } else if (config?.sending_account) {
-        fromAlias = config.sending_account
+      }
+
+      // Check per-account daily limit
+      const senderKey = fromAlias || '_default'
+      const accountSentToday = (perAccountSentToday[senderKey] || 0) + (senderSentCount[senderKey] || 0)
+      if (accountSentToday >= dailyLimit) {
+        results.push({ id: email.id, status: 'skipped_limit', error: `Account ${senderKey} hit daily limit (${dailyLimit})` })
+        continue
       }
 
       // Check if tracking is enabled for this campaign
@@ -265,8 +277,6 @@ ${email.body.replace(/\n/g, '<br/>')}
       results.push({ id: email.id, status: 'failed', error: err instanceof Error ? err.message : 'Unknown error' })
     }
 
-    // Check daily limit
-    if ((sentToday || 0) + sentCount >= maxPerDay) break
   }
 
   // Auto-complete sequences where all emails are sent/skipped

@@ -6,6 +6,7 @@ import {
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
+import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -67,6 +68,7 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
   const [sendHoursStart, setSendHoursStart] = useState(9)
   const [sendHoursEnd, setSendHoursEnd] = useState(18)
   const [timezone, setTimezone] = useState("America/Sao_Paulo")
+  const [dailyLimitPerAccount, setDailyLimitPerAccount] = useState(25)
 
   // Stats per sender
   const [senderStats, setSenderStats] = useState<Record<string, { sentToday: number; allocated: number; pending: number }>>({})
@@ -107,6 +109,7 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
       if (s.send_hours_start !== undefined) setSendHoursStart(s.send_hours_start)
       if (s.send_hours_end !== undefined) setSendHoursEnd(s.send_hours_end)
       if (s.timezone) setTimezone(s.timezone)
+      if ((s as unknown as Record<string, number>).daily_limit_per_account !== undefined) setDailyLimitPerAccount((s as unknown as Record<string, number>).daily_limit_per_account)
     } else {
       // Load global defaults as fallback
       const { data: sendingData } = await supabase
@@ -121,6 +124,7 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
         if (d.hours_start) setSendHoursStart(parseInt(d.hours_start))
         if (d.hours_end) setSendHoursEnd(parseInt(d.hours_end))
         if (d.send_days) setSendDays(JSON.parse(d.send_days))
+        if (d.daily_limit_per_account) setDailyLimitPerAccount(parseInt(d.daily_limit_per_account))
       }
     }
 
@@ -193,13 +197,14 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
     setSaving(true)
     const supabase = createClient()
 
-    const settings: CampaignSendSettings = {
+    const settings = {
       sender_accounts: senderAccounts,
       track_opens: trackOpens,
       send_days: sendDays,
       send_hours_start: sendHoursStart,
       send_hours_end: sendHoursEnd,
       timezone,
+      daily_limit_per_account: dailyLimitPerAccount,
     }
 
     const { error } = await supabase
@@ -317,6 +322,20 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
                   </span>
                 </div>
               )}
+
+              {/* Daily limit per account */}
+              <div className="flex items-center gap-3 pt-2">
+                <Label className="text-sm shrink-0">Daily limit per account</Label>
+                <Input
+                  type="number"
+                  min={1}
+                  max={100}
+                  className="w-[80px] h-8"
+                  value={dailyLimitPerAccount}
+                  onChange={(e) => setDailyLimitPerAccount(parseInt(e.target.value) || 25)}
+                />
+                <span className="text-xs text-gray-400">emails/day per sender</span>
+              </div>
             </div>
           )}
         </CardContent>

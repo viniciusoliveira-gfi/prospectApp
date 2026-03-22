@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation"
 import Link from "next/link"
 import {
   ArrowLeft, Building2, Globe, MapPin, Users, Factory,
-  ExternalLink, Mail, Phone, Loader2, RefreshCw,
+  ExternalLink, Mail, Phone,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -29,7 +29,6 @@ export default function ProspectDetailPage() {
   const [prospect, setProspect] = useState<Prospect | null>(null)
   const [contacts, setContacts] = useState<ContactWithMeta[]>([])
   const [loading, setLoading] = useState(true)
-  const [researching, setResearching] = useState(false)
 
   const fetchData = useCallback(async () => {
     const supabase = createClient()
@@ -61,22 +60,6 @@ export default function ProspectDetailPage() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
-  const handleResearch = async () => {
-    setResearching(true)
-    try {
-      const res = await fetch("/api/ai/research", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prospect_id: prospectId }),
-      })
-      if (!res.ok) throw new Error()
-      toast.success("Research completed")
-      fetchData()
-    } catch {
-      toast.error("Research failed")
-    }
-    setResearching(false)
-  }
 
   if (loading) {
     return (
@@ -112,15 +95,6 @@ export default function ProspectDetailPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <CardTitle className="text-base">Company Information</CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleResearch}
-            disabled={researching}
-          >
-            {researching ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-            {prospect.ai_research ? "Re-research" : "Research"}
-          </Button>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

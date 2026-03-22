@@ -65,7 +65,7 @@ function SettingsContent() {
   const searchParams = useSearchParams()
   const [claudeKey, setClaudeKey] = useState("")
   const [apolloKey, setApolloKey] = useState("")
-  const [dailyLimit, setDailyLimit] = useState("25")
+  const [dailyLimitPerAccount, setDailyLimitPerAccount] = useState("25")
   const [sendInterval, setSendInterval] = useState("60")
   const [sendHoursStart, setSendHoursStart] = useState("9")
   const [sendHoursEnd, setSendHoursEnd] = useState("18")
@@ -128,7 +128,8 @@ function SettingsContent() {
 
     if (sendingData?.value) {
       const defaults = sendingData.value as Record<string, string>
-      if (defaults.daily_limit) setDailyLimit(defaults.daily_limit)
+      if (defaults.daily_limit_per_account) setDailyLimitPerAccount(defaults.daily_limit_per_account)
+      else if (defaults.daily_limit) setDailyLimitPerAccount(defaults.daily_limit)
       if (defaults.send_interval) setSendInterval(defaults.send_interval)
       if (defaults.hours_start) setSendHoursStart(defaults.hours_start)
       if (defaults.hours_end) setSendHoursEnd(defaults.hours_end)
@@ -164,7 +165,7 @@ function SettingsContent() {
     const { error } = await supabase.from("settings").upsert({
       key: "sending_defaults",
       value: {
-        daily_limit: dailyLimit,
+        daily_limit_per_account: dailyLimitPerAccount,
         send_interval: sendInterval,
         hours_start: sendHoursStart,
         hours_end: sendHoursEnd,
@@ -323,8 +324,9 @@ function SettingsContent() {
         <CardContent className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>Daily Send Limit</Label>
-              <Input type="number" value={dailyLimit} onChange={(e) => setDailyLimit(e.target.value)} />
+              <Label>Daily Limit per Account</Label>
+              <Input type="number" value={dailyLimitPerAccount} onChange={(e) => setDailyLimitPerAccount(e.target.value)} />
+              <p className="text-xs text-gray-400">Max emails per Gmail account per day. Applies to all connected accounts.</p>
             </div>
             <div className="space-y-2">
               <Label>Send Interval (minutes)</Label>

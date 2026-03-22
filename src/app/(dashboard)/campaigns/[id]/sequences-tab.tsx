@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react"
 import {
-  Plus, Loader2, Trash2, Wand2, ListOrdered, GripVertical,
+  Plus, Loader2, Trash2, ListOrdered, GripVertical,
   Play, Pause, RotateCcw, CheckCircle2, Clock, AlertCircle,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -64,7 +64,6 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
   const [createOpen, setCreateOpen] = useState(false)
   const [viewingSequence, setViewingSequence] = useState<{ id: string; name: string } | null>(null)
   const [confirmStart, setConfirmStart] = useState<string | null>(null)
-  const [generating, setGenerating] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState<string | null>(null)
   const [emailStats, setEmailStats] = useState<Record<string, EmailStats>>({})
   const [stepDetails, setStepDetails] = useState<Record<string, SequenceStepDetail[]>>({})
@@ -165,23 +164,6 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
     setCreating(false)
   }
 
-  const handleGenerate = async (sequenceId: string) => {
-    setGenerating(sequenceId)
-    toast.info("Generating personalized emails... This may take a minute.")
-
-    try {
-      const res = await fetch(`/api/sequences/${sequenceId}/generate`, {
-        method: "POST",
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      toast.success(`Generated ${data.successful} emails (${data.failed} failed)`)
-      fetchEmailStats([sequenceId])
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Generation failed")
-    }
-    setGenerating(null)
-  }
 
   const handleStart = async (sequenceId: string) => {
     setActionLoading(sequenceId)
@@ -353,22 +335,6 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
                       >
                         {isLoading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
                         Resume
-                      </Button>
-                    )}
-
-                    {seq.status === "draft" && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleGenerate(seq.id)}
-                        disabled={generating === seq.id}
-                      >
-                        {generating === seq.id ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Wand2 className="mr-2 h-4 w-4" />
-                        )}
-                        Generate Emails
                       </Button>
                     )}
 
