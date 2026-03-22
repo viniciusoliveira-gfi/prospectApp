@@ -17,9 +17,6 @@ import { SettingsTab } from "./settings-tab"
 import { AnalyticsTab } from "./analytics-tab"
 import { ArrowLeft } from "lucide-react"
 import Link from "next/link"
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select"
 
 const statusColors: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   draft: "secondary",
@@ -54,21 +51,6 @@ export default function CampaignDetailPage() {
 
   useEffect(() => { fetchCampaign() }, [fetchCampaign])
 
-  const updateStatus = async (status: string) => {
-    const supabase = createClient()
-    const { error } = await supabase
-      .from("campaigns")
-      .update({ status })
-      .eq("id", campaignId)
-
-    if (error) {
-      toast.error("Failed to update status")
-    } else {
-      setCampaign(prev => prev ? { ...prev, status: status as Campaign["status"] } : null)
-      toast.success(`Campaign ${status}`)
-    }
-  }
-
   if (loading) {
     return (
       <div className="space-y-4">
@@ -83,29 +65,14 @@ export default function CampaignDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
-            <Link href="/campaigns"><ArrowLeft className="h-4 w-4" /></Link>
-          </Button>
-          <h2 className="text-xl font-semibold">{campaign.name}</h2>
-          <Badge variant={statusColors[campaign.status] || "secondary"}>
-            {campaign.status}
-          </Badge>
-        </div>
-        <div className="flex items-center gap-2">
-          <Select value={campaign.status} onValueChange={updateStatus}>
-            <SelectTrigger className="w-[140px]">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="draft">Draft</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="paused">Paused</SelectItem>
-              <SelectItem value="completed">Completed</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="flex items-center gap-3">
+        <Button variant="ghost" size="icon" asChild>
+          <Link href="/campaigns"><ArrowLeft className="h-4 w-4" /></Link>
+        </Button>
+        <h2 className="text-xl font-semibold">{campaign.name}</h2>
+        <Badge variant={statusColors[campaign.status] || "secondary"}>
+          {campaign.status}
+        </Badge>
       </div>
 
       {campaign.description && (

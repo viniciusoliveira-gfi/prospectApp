@@ -338,7 +338,7 @@ export function SequencesTab({ campaignId }: SequenceTabProps) {
                       </Button>
                     )}
 
-                    {seq.status === "draft" && (
+                    {seq.status !== "active" && (
                       <Button variant="ghost" size="icon" onClick={() => handleDelete(seq.id)}>
                         <Trash2 className="h-4 w-4" />
                       </Button>
