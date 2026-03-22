@@ -75,7 +75,7 @@ export function EmailsTab({ campaignId }: EmailsTabProps) {
       .select("*, contacts(first_name, last_name, email), prospects(company_name), sequence_steps(step_number, sequence_id)")
       .in("sequence_step_id", steps.map(s => s.id))
       .order("created_at", { ascending: false })
-      .limit(200)
+      .limit(1000)
 
     if (filterApproval !== "all") query = query.eq("approval_status", filterApproval)
     if (filterSend !== "all") query = query.eq("send_status", filterSend)
