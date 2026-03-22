@@ -22,6 +22,7 @@ interface EmailRow {
   send_status: string
   scheduled_for: string | null
   sent_at: string | null
+  sent_from: string | null
   open_count: number
   replied_at: string | null
   contacts: { first_name: string; last_name: string; email: string } | null
@@ -226,6 +227,7 @@ export function EmailsTab({ campaignId }: EmailsTabProps) {
                   <TableHead>Step</TableHead>
                   <TableHead>Contact</TableHead>
                   <TableHead>Subject</TableHead>
+                  <TableHead>From</TableHead>
                   <TableHead>Approval</TableHead>
                   <TableHead>Send</TableHead>
                   <TableHead>Opens</TableHead>
@@ -244,6 +246,9 @@ export function EmailsTab({ campaignId }: EmailsTabProps) {
                     </TableCell>
                     <TableCell className="text-sm max-w-[200px] truncate">
                       {email.subject}
+                    </TableCell>
+                    <TableCell className="text-xs text-gray-500">
+                      {email.sent_from || "—"}
                     </TableCell>
                     <TableCell>{approvalBadge(email.approval_status)}</TableCell>
                     <TableCell>

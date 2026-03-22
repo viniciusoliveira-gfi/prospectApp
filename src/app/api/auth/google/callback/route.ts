@@ -31,15 +31,47 @@ export async function GET(request: NextRequest) {
       // Calendar API not enabled or permission denied — use default
     }
 
-    // Store tokens + timezone in settings
+    // Store tokens + timezone in settings (unique key per account for multi-account support)
     const supabase = createAdminClient()
+    const email = userInfo.email!
+    // Use gmail_tokens for first account (backward compat), gmail_tokens_<email> for additional
+    const { data: existing } = await supabase
+      .from('settings')
+      .select('key')
+      .like('key', 'gmail_tokens%')
+
+    const existingEmails = new Set<string>()
+    for (const row of (existing || [])) {
+      // Check if this email already has an entry
+      const { data: rowData } = await supabase.from('settings').select('value').eq('key', row.key).single()
+      if (rowData?.value && (rowData.value as { email?: string }).email) {
+        existingEmails.add((rowData.value as { email: string }).email)
+      }
+    }
+
+    // Determine key: reuse existing key if same email, or create new one
+    let settingsKey = 'gmail_tokens'
+    if (existingEmails.has(email)) {
+      // Find the existing key for this email
+      for (const row of (existing || [])) {
+        const { data: rowData } = await supabase.from('settings').select('value').eq('key', row.key).single()
+        if (rowData?.value && (rowData.value as { email?: string }).email === email) {
+          settingsKey = row.key
+          break
+        }
+      }
+    } else if (existing?.length && !existingEmails.has(email)) {
+      // New account — use email-based key
+      settingsKey = `gmail_tokens_${email.replace(/[@.]/g, '_')}`
+    }
+
     await supabase.from('settings').upsert({
-      key: 'gmail_tokens',
+      key: settingsKey,
       value: {
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expiry_date: tokens.expiry_date,
-        email: userInfo.email,
+        email,
         timezone,
       },
     })

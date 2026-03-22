@@ -105,6 +105,7 @@ export interface Email {
   sent_at: string | null
   gmail_message_id: string | null
   gmail_thread_id: string | null
+  sent_from: string | null
   tracking_pixel_id: string
   opened_at: string | null
   open_count: number

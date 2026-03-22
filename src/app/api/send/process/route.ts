@@ -239,6 +239,7 @@ ${email.body.replace(/\n/g, '<br/>')}
         sent_at: new Date().toISOString(),
         gmail_message_id: result.messageId,
         gmail_thread_id: result.threadId,
+        sent_from: fromAlias || null,
       }).eq('id', email.id)
 
       // Log activity
