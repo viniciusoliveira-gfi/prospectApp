@@ -115,7 +115,139 @@ export interface Email {
   reply_snippet: string | null
   bounced_at: string | null
   error_message: string | null
+  experiment_id: string | null
+  variant_id: string | null
+  test_dimensions: Record<string, string> | null
+  metadata: EmailMetadata | null
   created_at: string
+}
+
+export interface EmailMetadata {
+  strategy_notes?: string
+  fomo_style?: 'named' | 'unnamed' | 'none'
+  fomo_companies_mentioned?: string[]
+  tone?: 'provocative' | 'consultative' | 'direct' | 'friendly'
+  value_prop?: string
+  subject_style?: 'question' | 'statement' | 'provocative' | 'personalized_stat'
+  cta_style?: 'soft_ask' | 'hard_ask' | 'no_cta' | 'curiosity_hook'
+  personalization_elements?: string[]
+  word_count?: number
+  research_references?: string[]
+}
+
+export type ExperimentStatus = 'draft' | 'active' | 'paused' | 'completed' | 'analyzed'
+
+export interface PainPoint {
+  pain: string
+  severity: 'high' | 'medium' | 'low'
+  evidence: string
+}
+
+export interface Opportunity {
+  opportunity: string
+  fit_score: number
+  rationale: string
+}
+
+export interface PersonaMapping {
+  name: string
+  title: string
+  contact_id?: string
+  role_in_deal: string
+  pain_points: string[]
+  messaging_angle: string
+  tone: string
+}
+
+export interface LocalCompetitor {
+  company_name: string
+  relationship: string
+  fomo_usable: boolean
+}
+
+export interface MessagingHypothesis {
+  hypothesis: string
+  test_dimension: string
+  confidence: 'high' | 'medium' | 'low'
+}
+
+export interface ProspectResearch {
+  id: string
+  prospect_id: string
+  campaign_id: string | null
+  company_overview: string | null
+  market_position: string | null
+  tech_stack: Record<string, unknown> | null
+  recent_news: string | null
+  pain_points: PainPoint[] | null
+  opportunities: Opportunity[] | null
+  personas: PersonaMapping[] | null
+  local_competitors: LocalCompetitor[] | null
+  fomo_strategy: string | null
+  competitor_naming_strategy: string | null
+  core_value_prop: string | null
+  messaging_hypotheses: MessagingHypothesis[] | null
+  positioning_angle: string | null
+  objection_map: { objection: string; response: string }[] | null
+  research_depth: string
+  researched_at: string
+  researched_by: string
+  created_at: string
+  updated_at: string
+}
+
+export interface ExperimentVariant {
+  variant_id: string
+  label: string
+  description: string
+}
+
+export interface Experiment {
+  id: string
+  campaign_id: string | null
+  name: string
+  description: string | null
+  status: ExperimentStatus
+  test_dimension: string
+  hypothesis: string
+  variants: ExperimentVariant[]
+  assignment_method: string
+  primary_metric: string
+  secondary_metrics: string[] | null
+  min_sample_per_variant: number
+  confidence_threshold: number
+  winner_variant: string | null
+  learnings: string | null
+  created_at: string
+  updated_at: string
+  completed_at: string | null
+}
+
+export interface ExperimentAssignment {
+  id: string
+  experiment_id: string
+  contact_id: string
+  variant_id: string
+  emails_sent: number
+  emails_opened: number
+  emails_replied: number
+  reply_sentiment: string | null
+  meeting_booked: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface GrowthPlaybookEntry {
+  id: string
+  dimension: string
+  vertical: string | null
+  insight: string
+  evidence: string | null
+  confidence: 'hypothesis' | 'tested' | 'validated' | 'proven'
+  applies_to: Record<string, unknown> | null
+  source_experiment_id: string | null
+  created_at: string
+  updated_at: string
 }
 
 export interface ActivityLog {
