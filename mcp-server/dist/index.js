@@ -536,8 +536,8 @@ server.tool("push_emails", "Push personalized emails into the approval queue for
         body: z.string().describe("Final email body for this contact"),
         experiment_id: z.string().optional(),
         variant_id: z.string().optional(),
-        test_dimensions: z.record(z.string()).optional().describe("e.g., {fomo_style: 'named', tone: 'provocative'}"),
-        metadata: z.record(z.unknown()).optional().describe("Strategy metadata: fomo_style, tone, value_prop, subject_style, cta_style, strategy_notes, etc."),
+        test_dimensions: z.record(z.string(), z.string()).optional().describe("e.g., {fomo_style: 'named', tone: 'provocative'}"),
+        metadata: z.record(z.string(), z.unknown()).optional().describe("Strategy metadata: fomo_style, tone, value_prop, subject_style, cta_style, strategy_notes, etc."),
     })),
 }, async ({ sequence_step_id, emails }) => {
     const records = emails.map(e => ({
@@ -568,8 +568,8 @@ server.tool("push_all_emails_for_sequence", "Push personalized emails for ALL co
         body: z.string(),
         experiment_id: z.string().optional(),
         variant_id: z.string().optional(),
-        test_dimensions: z.record(z.string()).optional(),
-        metadata: z.record(z.unknown()).optional(),
+        test_dimensions: z.record(z.string(), z.string()).optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
     })).describe("All emails for all steps and contacts"),
 }, async ({ sequence_id, emails }) => {
     // Get step IDs for this sequence
@@ -994,7 +994,7 @@ server.tool("push_prospect_research", "Push structured research dossier for a pr
     campaign_id: z.string().optional(),
     company_overview: z.string().optional(),
     market_position: z.string().optional(),
-    tech_stack: z.record(z.unknown()).optional(),
+    tech_stack: z.record(z.string(), z.unknown()).optional(),
     recent_news: z.string().optional(),
     pain_points: z.array(z.object({
         pain: z.string(),
@@ -1272,7 +1272,7 @@ server.tool("add_to_playbook", "Add an insight to the growth playbook. This is h
     vertical: z.string().optional().describe("e.g., 'real_estate', 'saas', 'consulting'"),
     evidence: z.string().optional().describe("Supporting evidence or experiment reference"),
     confidence: z.enum(["hypothesis", "tested", "validated", "proven"]).optional(),
-    applies_to: z.record(z.unknown()).optional().describe("Where this insight applies"),
+    applies_to: z.record(z.string(), z.unknown()).optional().describe("Where this insight applies"),
     source_experiment_id: z.string().optional(),
 }, async ({ dimension, insight, vertical, evidence, confidence, applies_to, source_experiment_id }) => {
     const { data, error } = await supabase.from("growth_playbook").insert({
