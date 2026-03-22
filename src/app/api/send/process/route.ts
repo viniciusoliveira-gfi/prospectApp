@@ -266,6 +266,16 @@ ${email.body.replace(/\n/g, '<br/>')}
       sentCount++
       results.push({ id: email.id, status: 'sent' })
 
+      // Update experiment assignment counters
+      if (email.experiment_id && email.contact_id) {
+        try {
+          await supabase.rpc('increment_experiment_sent', {
+            p_experiment_id: email.experiment_id,
+            p_contact_id: email.contact_id,
+          })
+        } catch { /* best-effort */ }
+      }
+
       // Track which sequences have sent emails for completion check
       if (stepInfo) completedSequences.add(stepInfo.sequence_id)
     } catch (err) {
