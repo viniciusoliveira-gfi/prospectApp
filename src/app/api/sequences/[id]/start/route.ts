@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
-import { calculateScheduledFor, checkSequenceReadiness } from '@/lib/scheduling'
+import { checkSequenceReadiness } from '@/lib/scheduling'
 
 export async function POST(
   _request: Request,
@@ -130,33 +130,93 @@ export async function POST(
     .eq('id', sequenceId)
 
   // Smart schedule: distribute emails across days respecting daily limits
-  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').trim()
-  let scheduleResult = null
-  try {
-    const res = await fetch(`${appUrl}/api/sequences/${sequenceId}/recalculate`, { method: 'POST' })
-    scheduleResult = await res.json()
-  } catch {
-    // Fallback: basic scheduling if recalculate fails
-    const stepDelayMap = Object.fromEntries(steps.map(s => [s.id, s.delay_days]))
-    for (const email of emails) {
+  // Resolve campaign + global settings
+  const sendSettingsRaw = (campaign?.send_settings || {}) as {
+    send_days?: string[]
+    send_hours_start?: number
+    timezone?: string
+    daily_limit_per_account?: number
+  }
+
+  const { data: globalSettings } = await supabase
+    .from('settings')
+    .select('value')
+    .eq('key', 'sending_defaults')
+    .single()
+
+  const global = (globalSettings?.value || {}) as Record<string, string>
+
+  const sendDays = sendSettingsRaw.send_days?.length
+    ? sendSettingsRaw.send_days
+    : global.send_days ? JSON.parse(global.send_days) : ['1', '2', '3', '4', '5']
+
+  const hoursStart = sendSettingsRaw.send_hours_start ?? parseInt(global.hours_start || '9')
+  const timezone = sendSettingsRaw.timezone || global.timezone || 'America/Sao_Paulo'
+  const dailyLimitPerAccount = sendSettingsRaw.daily_limit_per_account
+    || parseInt(global.daily_limit_per_account || global.daily_limit || '25')
+
+  const dailyCapacity = senderAccounts.length * dailyLimitPerAccount
+
+  // Base date in timezone
+  const tzNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }))
+
+  // Helper: find next valid send day
+  function nextSendDay(from: Date, addDays: number): Date {
+    const target = new Date(from)
+    target.setDate(target.getDate() + addDays)
+    target.setHours(hoursStart, 0, 0, 0)
+    let safety = 0
+    while (!sendDays.includes(String(target.getDay())) && safety < 7) {
+      target.setDate(target.getDate() + 1)
+      safety++
+    }
+    return target
+  }
+
+  // Group emails by step
+  const emailsByStep: Record<string, typeof emails> = {}
+  for (const step of steps) {
+    emailsByStep[step.id] = emails.filter(e => e.sequence_step_id === step.id)
+  }
+
+  const schedule: { step: number; count: number; lastDay: string }[] = []
+
+  for (const step of steps) {
+    const stepEmails = emailsByStep[step.id] || []
+    if (!stepEmails.length) continue
+
+    let currentDate = nextSendDay(tzNow, step.delay_days)
+    let assignedToday = 0
+
+    for (const email of stepEmails) {
+      if (assignedToday >= dailyCapacity) {
+        currentDate = nextSendDay(currentDate, 1)
+        assignedToday = 0
+      }
+
       await supabase
         .from('emails')
         .update({
-          scheduled_for: calculateScheduledFor({
-            startTime: now,
-            delayDays: stepDelayMap[email.sequence_step_id],
-          }).toISOString(),
+          scheduled_for: currentDate.toISOString(),
           send_status: 'scheduled' as const,
         })
         .eq('id', email.id)
+
+      assignedToday++
     }
+
+    schedule.push({
+      step: step.step_number,
+      count: stepEmails.length,
+      lastDay: currentDate.toLocaleDateString(),
+    })
   }
 
   return NextResponse.json({
     message: 'Sequence started',
     emails_scheduled: emails.length,
     sender_accounts: senderAccounts,
-    schedule: scheduleResult?.schedule || null,
-    daily_capacity: scheduleResult?.daily_capacity || null,
+    daily_capacity: dailyCapacity,
+    schedule,
   })
 }
