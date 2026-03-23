@@ -755,6 +755,216 @@ server.tool("reject_emails", "Reject emails", {
         return { content: [{ type: "text", text: `Error: ${error.message}` }] };
     return { content: [{ type: "text", text: `${data.length} emails rejected.` }] };
 });
+server.tool("delete_emails", "Permanently delete emails from the database. Only emails with send_status queued/scheduled/skipped can be deleted — sent emails are protected. Optionally pass campaign_id with no email_ids to delete all rejected emails in that campaign.", {
+    email_ids: z.array(z.string()).optional().describe("Specific email IDs to delete"),
+    campaign_id: z.string().optional().describe("If provided with no email_ids, deletes all rejected emails in this campaign"),
+}, async ({ email_ids, campaign_id }) => {
+    if (!email_ids?.length && !campaign_id) {
+        return { content: [{ type: "text", text: "Provide email_ids or campaign_id." }] };
+    }
+    // Campaign cleanup mode: delete all rejected emails
+    if (!email_ids?.length && campaign_id) {
+        const { data: seqs } = await supabase.from("sequences").select("id").eq("campaign_id", campaign_id);
+        if (!seqs?.length)
+            return { content: [{ type: "text", text: "No sequences in this campaign." }] };
+        const { data: steps } = await supabase.from("sequence_steps").select("id").in("sequence_id", seqs.map(s => s.id));
+        if (!steps?.length)
+            return { content: [{ type: "text", text: "No steps found." }] };
+        const { data: rejected } = await supabase
+            .from("emails")
+            .select("id")
+            .in("sequence_step_id", steps.map(s => s.id))
+            .eq("approval_status", "rejected")
+            .in("send_status", ["queued", "scheduled", "skipped"]);
+        if (!rejected?.length)
+            return { content: [{ type: "text", text: "No rejected emails to clean up." }] };
+        const { error } = await supabase.from("emails").delete().in("id", rejected.map(e => e.id));
+        if (error)
+            return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+        return { content: [{ type: "text", text: `Deleted ${rejected.length} rejected emails from campaign.` }] };
+    }
+    // Specific email deletion
+    // First check which ones are safe to delete
+    const { data: emails } = await supabase
+        .from("emails")
+        .select("id, send_status")
+        .in("id", email_ids);
+    if (!emails?.length)
+        return { content: [{ type: "text", text: "No emails found with those IDs." }] };
+    const deletable = emails.filter(e => ["queued", "scheduled", "skipped"].includes(e.send_status));
+    const protected_ = emails.filter(e => e.send_status === "sent");
+    const failed = email_ids.filter(id => !emails.find(e => e.id === id));
+    if (!deletable.length) {
+        return { content: [{ type: "text", text: `Cannot delete: ${protected_.length} sent (protected), ${failed.length} not found.` }] };
+    }
+    const { error } = await supabase.from("emails").delete().in("id", deletable.map(e => e.id));
+    if (error)
+        return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    let result = `Deleted ${deletable.length} emails.`;
+    if (protected_.length)
+        result += ` ${protected_.length} sent emails protected (not deleted).`;
+    if (failed.length)
+        result += ` ${failed.length} IDs not found.`;
+    return { content: [{ type: "text", text: result }] };
+});
+server.tool("get_campaign_email_audit", "Audit all emails in a campaign to surface data quality issues: missing steps, duplicates, orphans, mismatches. Use this instead of list_emails for large campaigns.", {
+    campaign_id: z.string(),
+}, async ({ campaign_id }) => {
+    // Get sequences and steps
+    const { data: sequences } = await supabase
+        .from("sequences")
+        .select("id, name")
+        .eq("campaign_id", campaign_id);
+    if (!sequences?.length)
+        return { content: [{ type: "text", text: "No sequences in this campaign." }] };
+    const { data: allSteps } = await supabase
+        .from("sequence_steps")
+        .select("id, sequence_id, step_number")
+        .in("sequence_id", sequences.map(s => s.id))
+        .order("step_number");
+    if (!allSteps?.length)
+        return { content: [{ type: "text", text: "No steps found." }] };
+    // Get all emails
+    const stepIds = allSteps.map(s => s.id);
+    const { data: emails } = await supabase
+        .from("emails")
+        .select("id, sequence_step_id, contact_id, approval_status, send_status")
+        .in("sequence_step_id", stepIds);
+    // Get active contacts in this campaign
+    const { data: contacts } = await supabase
+        .from("contacts")
+        .select("id, first_name, last_name, email, prospect_id")
+        .eq("campaign_id", campaign_id)
+        .eq("status", "active");
+    const contactMap = Object.fromEntries((contacts || []).map(c => [c.id, c]));
+    const activeContactIds = new Set((contacts || []).map(c => c.id));
+    const seqMap = Object.fromEntries(sequences.map(s => [s.id, s.name]));
+    const stepSeqMap = Object.fromEntries(allSteps.map(s => [s.id, s.sequence_id]));
+    const stepNumMap = Object.fromEntries(allSteps.map(s => [s.id, s.step_number]));
+    // 1. Per-sequence summary
+    const seqSummaries = [];
+    for (const seq of sequences) {
+        const seqSteps = allSteps.filter(s => s.sequence_id === seq.id);
+        const seqStepIds = seqSteps.map(s => s.id);
+        const seqEmails = (emails || []).filter(e => seqStepIds.includes(e.sequence_step_id));
+        // Count unique contacts
+        const seqContactIds = new Set(seqEmails.map(e => e.contact_id));
+        const emailsPerStep = {};
+        for (const step of seqSteps) {
+            emailsPerStep[step.step_number] = seqEmails.filter(e => e.sequence_step_id === step.id).length;
+        }
+        const stepCounts = Object.values(emailsPerStep);
+        const allEqual = stepCounts.every(c => c === stepCounts[0]);
+        const status = allEqual && stepCounts[0] === seqContactIds.size ? "OK" : "MISMATCH";
+        const stepLine = Object.entries(emailsPerStep).map(([s, c]) => `Step ${s}: ${c}`).join(", ");
+        seqSummaries.push(`**${seq.name}** [${status}]\n  Contacts: ${seqContactIds.size} | ${stepLine}`);
+    }
+    // 2. Per-contact issues
+    const contactIssues = [];
+    for (const contact of (contacts || [])) {
+        const contactEmails = (emails || []).filter(e => e.contact_id === contact.id);
+        for (const seq of sequences) {
+            const seqSteps = allSteps.filter(s => s.sequence_id === seq.id);
+            const seqStepIds = seqSteps.map(s => s.id);
+            const contactSeqEmails = contactEmails.filter(e => seqStepIds.includes(e.sequence_step_id));
+            if (contactSeqEmails.length === 0)
+                continue; // not in this sequence
+            const expectedSteps = seqSteps.length;
+            const actualSteps = contactSeqEmails.length;
+            // Check for missing steps
+            const presentSteps = new Set(contactSeqEmails.map(e => stepNumMap[e.sequence_step_id]));
+            const missingSteps = seqSteps.filter(s => !presentSteps.has(s.step_number)).map(s => s.step_number);
+            // Check for duplicates
+            const stepCounts = {};
+            for (const e of contactSeqEmails) {
+                const sn = stepNumMap[e.sequence_step_id];
+                stepCounts[sn] = (stepCounts[sn] || 0) + 1;
+            }
+            const duplicateSteps = Object.entries(stepCounts).filter(([, c]) => c > 1).map(([s]) => parseInt(s));
+            if (missingSteps.length || duplicateSteps.length) {
+                contactIssues.push(`**${contact.first_name} ${contact.last_name}** (${contact.email}) — ${seqMap[seq.id]}\n` +
+                    `  Expected: ${expectedSteps} steps, Got: ${actualSteps}` +
+                    (missingSteps.length ? ` | Missing: ${missingSteps.join(", ")}` : "") +
+                    (duplicateSteps.length ? ` | Duplicates: ${duplicateSteps.join(", ")}` : ""));
+            }
+        }
+    }
+    // 3. Orphan emails (contact not in active contacts for this campaign)
+    const orphanEmails = (emails || []).filter(e => !activeContactIds.has(e.contact_id));
+    const orphanByContact = {};
+    for (const e of orphanEmails) {
+        if (!orphanByContact[e.contact_id]) {
+            const c = contactMap[e.contact_id];
+            orphanByContact[e.contact_id] = {
+                name: c ? `${c.first_name} ${c.last_name}` : e.contact_id,
+                count: 0,
+                ids: [],
+            };
+        }
+        orphanByContact[e.contact_id].count++;
+        orphanByContact[e.contact_id].ids.push(e.id);
+    }
+    // 4. Duplicate detection across all contacts
+    const duplicates = [];
+    for (const contact of (contacts || [])) {
+        const contactEmails = (emails || []).filter(e => e.contact_id === contact.id);
+        const byStep = {};
+        for (const e of contactEmails) {
+            const key = `${e.sequence_step_id}`;
+            if (!byStep[key])
+                byStep[key] = [];
+            byStep[key].push(e.id);
+        }
+        for (const [stepId, ids] of Object.entries(byStep)) {
+            if (ids.length > 1) {
+                duplicates.push(`${contact.first_name} ${contact.last_name} — Step ${stepNumMap[stepId]}: ${ids.length} copies (keep: ${ids[0]}, delete: ${ids.slice(1).join(", ")})`);
+            }
+        }
+    }
+    // 5. Totals
+    const totalEmails = (emails || []).length;
+    const totalContacts = (contacts || []).length;
+    const approved = (emails || []).filter(e => e.approval_status === "approved" || e.approval_status === "edited").length;
+    const rejected = (emails || []).filter(e => e.approval_status === "rejected").length;
+    // Calculate expected based on contacts × steps per sequence
+    let expectedTotal = 0;
+    for (const seq of sequences) {
+        const seqSteps = allSteps.filter(s => s.sequence_id === seq.id);
+        const seqEmails = (emails || []).filter(e => seqSteps.map(s => s.id).includes(e.sequence_step_id));
+        const seqContacts = new Set(seqEmails.filter(e => activeContactIds.has(e.contact_id)).map(e => e.contact_id));
+        expectedTotal += seqContacts.size * seqSteps.length;
+    }
+    const hasIssues = contactIssues.length > 0 || orphanEmails.length > 0 || duplicates.length > 0 || totalEmails !== expectedTotal;
+    const overallStatus = hasIssues ? "ISSUES_FOUND" : "CLEAN";
+    // Build report
+    let report = `**Campaign Email Audit** [${overallStatus}]\n\n`;
+    report += `**Totals:** ${totalEmails} emails | ${totalContacts} active contacts | Expected: ${expectedTotal} | Approved: ${approved} | Rejected: ${rejected}\n`;
+    report += `Orphaned: ${orphanEmails.length} | Duplicated: ${duplicates.length} | Contact issues: ${contactIssues.length}\n\n`;
+    report += `**Sequences:**\n${seqSummaries.join("\n")}\n\n`;
+    if (contactIssues.length) {
+        report += `**Contact Issues (${contactIssues.length}):**\n${contactIssues.slice(0, 20).join("\n")}\n`;
+        if (contactIssues.length > 20)
+            report += `  ... and ${contactIssues.length - 20} more\n`;
+        report += "\n";
+    }
+    if (orphanEmails.length) {
+        const orphanLines = Object.values(orphanByContact).map(o => `  ${o.name}: ${o.count} emails`);
+        report += `**Orphan Emails (${orphanEmails.length}):**\n${orphanLines.slice(0, 15).join("\n")}\n`;
+        if (orphanLines.length > 15)
+            report += `  ... and ${orphanLines.length - 15} more contacts\n`;
+        report += "\n";
+    }
+    if (duplicates.length) {
+        report += `**Duplicates (${duplicates.length}):**\n${duplicates.slice(0, 10).join("\n")}\n`;
+        if (duplicates.length > 10)
+            report += `  ... and ${duplicates.length - 10} more\n`;
+        report += "\n";
+    }
+    if (!hasIssues) {
+        report += "All emails accounted for. No issues found.";
+    }
+    return { content: [{ type: "text", text: report }] };
+});
 // ============================================================
 // CAMPAIGN SEND SETTINGS
 // ============================================================
