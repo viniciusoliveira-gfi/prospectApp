@@ -2,11 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react"
 import {
-  Mail, Clock, Eye, CheckCircle, Globe, Loader2, Info,
+  Mail, Clock, Eye, CheckCircle, Globe, Loader2, Info, FileText,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
+import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
@@ -69,6 +70,7 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
   const [sendHoursEnd, setSendHoursEnd] = useState(18)
   const [timezone, setTimezone] = useState("America/Sao_Paulo")
   const [dailyLimitPerAccount, setDailyLimitPerAccount] = useState(25)
+  const [signature, setSignature] = useState("")
 
   // Stats per sender
   const [senderStats, setSenderStats] = useState<Record<string, { sentToday: number; allocated: number; pending: number }>>({})
@@ -110,6 +112,7 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
       if (s.send_hours_end !== undefined) setSendHoursEnd(s.send_hours_end)
       if (s.timezone) setTimezone(s.timezone)
       if ((s as unknown as Record<string, number>).daily_limit_per_account !== undefined) setDailyLimitPerAccount((s as unknown as Record<string, number>).daily_limit_per_account)
+      if ((s as unknown as Record<string, string>).signature) setSignature((s as unknown as Record<string, string>).signature)
     } else {
       // Load global defaults as fallback
       const { data: sendingData } = await supabase
@@ -205,6 +208,7 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
       send_hours_end: sendHoursEnd,
       timezone,
       daily_limit_per_account: dailyLimitPerAccount,
+      signature,
     }
 
     const { error } = await supabase
@@ -213,6 +217,49 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
       .eq("id", campaignId)
 
     if (error) { toast.error("Failed to save settings"); setSaving(false); return }
+
+    // Update signature in all unsent emails for this campaign
+    if (signature) {
+      const { data: allSeqs } = await supabase
+        .from("sequences")
+        .select("id")
+        .eq("campaign_id", campaignId)
+
+      if (allSeqs?.length) {
+        const { data: allSteps } = await supabase
+          .from("sequence_steps")
+          .select("id")
+          .in("sequence_id", allSeqs.map(s => s.id))
+
+        if (allSteps?.length) {
+          // Get unsent emails
+          const { data: unsentEmails } = await supabase
+            .from("emails")
+            .select("id, body")
+            .in("sequence_step_id", allSteps.map(s => s.id))
+            .in("send_status", ["queued", "scheduled"])
+
+          if (unsentEmails?.length) {
+            let updated = 0
+            for (const email of unsentEmails) {
+              // Remove old signature if present (everything after last \n\n-- or last signature marker)
+              let body = email.body
+              const sigMarkerIndex = body.lastIndexOf("\n\n--\n")
+              if (sigMarkerIndex > 0) {
+                body = body.substring(0, sigMarkerIndex)
+              }
+              // Append new signature
+              const newBody = `${body.trimEnd()}\n\n--\n${signature}`
+              await supabase.from("emails").update({ body: newBody }).eq("id", email.id)
+              updated++
+            }
+            if (updated > 0) {
+              toast.success(`Signature updated in ${updated} unsent emails`)
+            }
+          }
+        }
+      }
+    }
 
     // Recalculate schedules for all active sequences in this campaign
     const { data: activeSeqs } = await supabase
@@ -473,6 +520,32 @@ export function SettingsTab({ campaignId }: SettingsTabProps) {
           <Button onClick={saveSettings} disabled={saving}>
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
             Save settings
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* Signature */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center gap-2">
+            <FileText className="h-5 w-5 text-gray-500" />
+            <CardTitle className="text-base">Email Signature</CardTitle>
+          </div>
+          <CardDescription>
+            Signature for this campaign. Changing it updates all unsent emails automatically.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <Textarea
+            placeholder={"Best regards,\nYour Name\nCompany Name"}
+            rows={5}
+            value={signature}
+            onChange={(e) => setSignature(e.target.value)}
+            className="text-sm"
+          />
+          <Button onClick={saveSettings} disabled={saving}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+            Save signature
           </Button>
         </CardContent>
       </Card>

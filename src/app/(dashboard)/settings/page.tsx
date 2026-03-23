@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
-import { Textarea } from "@/components/ui/textarea"
 import { Separator } from "@/components/ui/separator"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -15,7 +14,7 @@ import {
 import { toast } from "sonner"
 import { createClient } from "@/lib/supabase/client"
 import {
-  Key, Mail, Send, FileText, CheckCircle, Globe, Clock, Loader2,
+  Key, Mail, Send, CheckCircle, Globe, Clock, Loader2,
 } from "lucide-react"
 
 const COMMON_TIMEZONES = [
@@ -71,7 +70,6 @@ function SettingsContent() {
   const [sendHoursEnd, setSendHoursEnd] = useState("18")
   const [timezone, setTimezone] = useState("America/Sao_Paulo")
   const [sendDays, setSendDays] = useState<string[]>(["1", "2", "3", "4", "5"]) // Mon-Fri default
-  const [signature, setSignature] = useState("")
   const [gmailAccounts, setGmailAccounts] = useState<{ email: string; aliases: string[] }[]>([])
   const [loadingAliases, setLoadingAliases] = useState(false)
 
@@ -137,17 +135,6 @@ function SettingsContent() {
       if (defaults.send_days) setSendDays(JSON.parse(defaults.send_days))
     }
 
-    // Load signature
-    const { data: sigData } = await supabase
-      .from("settings")
-      .select("value")
-      .eq("key", "email_signature")
-      .single()
-
-    if (sigData?.value) {
-      const sig = sigData.value as { html?: string }
-      if (sig.html) setSignature(sig.html)
-    }
   }
 
   const saveApiKeys = async () => {
@@ -197,15 +184,6 @@ function SettingsContent() {
     }
   }
 
-  const saveSignature = async () => {
-    const supabase = createClient()
-    const { error } = await supabase.from("settings").upsert({
-      key: "email_signature",
-      value: { html: signature },
-    })
-    if (error) toast.error("Failed to save")
-    else toast.success("Email signature saved")
-  }
 
   const connectGmail = () => {
     window.location.href = "/api/auth/google"
@@ -444,19 +422,6 @@ function SettingsContent() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <FileText className="h-5 w-5 text-gray-500" />
-            <CardTitle>Email Signature</CardTitle>
-          </div>
-          <CardDescription>Default HTML signature appended to outgoing emails.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <Textarea placeholder="<p>Best regards,<br/>Your Name</p>" rows={6} value={signature} onChange={(e) => setSignature(e.target.value)} />
-          <Button onClick={saveSignature}>Save Signature</Button>
-        </CardContent>
-      </Card>
     </div>
   )
 }
