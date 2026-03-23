@@ -1140,6 +1140,155 @@ server.tool("recalculate_sequence_schedule", "Recalculate email schedules for a 
             }],
     };
 });
+server.tool("recalculate_campaign_schedule", "Recalculate schedules for ALL sequences in a campaign, distributing emails across days so no day exceeds total daily capacity. Respects send days, per-account limits, and step ordering.", {
+    campaign_id: z.string(),
+}, async ({ campaign_id }) => {
+    // 1. Get campaign settings
+    const { data: campaign } = await supabase
+        .from("campaigns")
+        .select("name, send_settings, sending_account, daily_send_limit")
+        .eq("id", campaign_id)
+        .single();
+    if (!campaign)
+        return { content: [{ type: "text", text: "Campaign not found." }] };
+    const ss = (campaign.send_settings || {});
+    const { data: globalSettings } = await supabase
+        .from("settings")
+        .select("value")
+        .eq("key", "sending_defaults")
+        .single();
+    const g = (globalSettings?.value || {});
+    const senderAccounts = ss.sender_accounts?.length
+        ? ss.sender_accounts
+        : campaign.sending_account ? [campaign.sending_account] : ["_default"];
+    const dailyLimitPerAccount = ss.daily_limit_per_account
+        || parseInt(g.daily_limit_per_account || g.daily_limit || "25");
+    const sendDays = ss.send_days?.length
+        ? ss.send_days
+        : g.send_days ? JSON.parse(g.send_days) : ["1", "2", "3", "4", "5"];
+    const hoursStart = ss.send_hours_start ?? parseInt(g.hours_start || "9");
+    const timezone = ss.timezone || g.timezone || "America/Sao_Paulo";
+    const totalDailyCapacity = senderAccounts.length * dailyLimitPerAccount;
+    // 2. Get all sequences in this campaign
+    const { data: sequences } = await supabase
+        .from("sequences")
+        .select("*, sequence_steps(*)")
+        .eq("campaign_id", campaign_id)
+        .in("status", ["active", "draft"]);
+    if (!sequences?.length)
+        return { content: [{ type: "text", text: "No active/draft sequences in this campaign." }] };
+    const allEmails = [];
+    const sequenceInfo = [];
+    for (const seq of sequences) {
+        const steps = (seq.sequence_steps || [])
+            .sort((a, b) => a.step_number - b.step_number);
+        if (!steps.length)
+            continue;
+        sequenceInfo.push({ id: seq.id, name: seq.name, started_at: seq.started_at });
+        const stepIds = steps.map(s => s.id);
+        const { data: emails } = await supabase
+            .from("emails")
+            .select("id, sequence_step_id, contact_id")
+            .in("sequence_step_id", stepIds)
+            .in("send_status", ["queued", "scheduled"]);
+        for (const email of (emails || [])) {
+            const step = steps.find(s => s.id === email.sequence_step_id);
+            if (!step)
+                continue;
+            allEmails.push({
+                id: email.id,
+                sequence_id: seq.id,
+                step_id: step.id,
+                step_number: step.step_number,
+                delay_days: step.delay_days,
+                contact_id: email.contact_id,
+            });
+        }
+    }
+    if (!allEmails.length)
+        return { content: [{ type: "text", text: "No unsent emails to schedule." }] };
+    // 4. Sort emails: by delay_days first (step 1 before step 2), then by sequence
+    allEmails.sort((a, b) => {
+        if (a.delay_days !== b.delay_days)
+            return a.delay_days - b.delay_days;
+        if (a.step_number !== b.step_number)
+            return a.step_number - b.step_number;
+        return 0;
+    });
+    // 5. Build day-by-day plan
+    const baseDate = new Date();
+    const tzBase = new Date(baseDate.toLocaleString("en-US", { timeZone: timezone }));
+    function nextSendDay(from, addDays) {
+        const target = new Date(from);
+        target.setDate(target.getDate() + addDays);
+        target.setHours(hoursStart, 0, 0, 0);
+        let safety = 0;
+        while (!sendDays.includes(String(target.getDay())) && safety < 7) {
+            target.setDate(target.getDate() + 1);
+            safety++;
+        }
+        return target;
+    }
+    // Group by delay_days bucket (all step 1s together, all step 2s, etc.)
+    const buckets = new Map();
+    for (const email of allEmails) {
+        if (!buckets.has(email.delay_days))
+            buckets.set(email.delay_days, []);
+        buckets.get(email.delay_days).push(email);
+    }
+    let totalRescheduled = 0;
+    const dayPlan = [];
+    const warnings = [];
+    // Track per-contact last send day to enforce step ordering
+    const contactLastSendDay = new Map();
+    for (const [delayDays, bucketEmails] of Array.from(buckets.entries()).sort((a, b) => a[0] - b[0])) {
+        let currentDate = nextSendDay(tzBase, delayDays);
+        let assignedToday = 0;
+        const dayKey = () => currentDate.toLocaleDateString();
+        // Check contact ordering: if a contact's previous step was scheduled,
+        // this step must be at least delay_days after
+        for (const email of bucketEmails) {
+            // Enforce: this email's date must be >= contact's last send + gap
+            const contactLast = contactLastSendDay.get(email.contact_id);
+            if (contactLast && currentDate < contactLast) {
+                currentDate = new Date(contactLast);
+            }
+            if (assignedToday >= totalDailyCapacity) {
+                currentDate = nextSendDay(currentDate, 1);
+                assignedToday = 0;
+            }
+            await supabase
+                .from("emails")
+                .update({ scheduled_for: currentDate.toISOString(), send_status: "scheduled" })
+                .eq("id", email.id);
+            contactLastSendDay.set(email.contact_id, nextSendDay(currentDate, 1));
+            assignedToday++;
+            totalRescheduled++;
+        }
+        const stepNames = Array.from(new Set(bucketEmails.map(e => `Step ${e.step_number}`))).join(", ");
+        dayPlan.push({ day: dayKey(), count: bucketEmails.length, steps: stepNames });
+    }
+    // Check for capacity warnings
+    const totalDays = dayPlan.length;
+    const totalEmails = allEmails.length;
+    if (totalEmails > totalDailyCapacity * 5) {
+        warnings.push(`High volume: ${totalEmails} emails will take ${Math.ceil(totalEmails / totalDailyCapacity)} send days at current capacity`);
+    }
+    // 6. Build report
+    let report = `**${campaign.name}** — Campaign Schedule Recalculated\n\n`;
+    report += `**Capacity:** ${totalDailyCapacity}/day (${senderAccounts.length} accounts × ${dailyLimitPerAccount}/day)\n`;
+    report += `**Emails:** ${totalRescheduled} rescheduled across ${sequenceInfo.length} sequence(s)\n`;
+    report += `**Send days:** ${sendDays.map((d) => ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][parseInt(d)]).join(", ")}\n`;
+    report += `**Timezone:** ${timezone}\n\n`;
+    report += `**Day-by-day plan:**\n`;
+    for (const dp of dayPlan) {
+        report += `  ${dp.day}: ${dp.count} emails (${dp.steps})\n`;
+    }
+    if (warnings.length) {
+        report += `\n**Warnings:**\n${warnings.map(w => `  ⚠ ${w}`).join("\n")}`;
+    }
+    return { content: [{ type: "text", text: report }] };
+});
 // ============================================================
 // PROSPECT RESEARCH DOSSIERS
 // ============================================================
