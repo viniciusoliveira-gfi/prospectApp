@@ -373,7 +373,12 @@ export function SequenceDetail({ sequenceId, sequenceName, onBack }: SequenceDet
                           {step.step_number === 1 ? "Initial email" : `Follow up ${step.step_number - 1}`}
                         </span>
                         <span className="text-xs text-gray-400">
-                          {step.delay_days === 0 ? "" : `${step.delay_days} days after previous`}
+                          {(() => {
+                            if (step.step_number === 1) return ""
+                            const prevStep = steps.find(s => s.step_number === step.step_number - 1)
+                            const gap = prevStep ? step.delay_days - prevStep.delay_days : step.delay_days
+                            return `${gap} days after previous · day ${step.delay_days} from start`
+                          })()}
                         </span>
                       </div>
                       <div className="flex items-center gap-2">

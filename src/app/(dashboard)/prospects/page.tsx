@@ -73,12 +73,16 @@ export default function ProspectsPage() {
     )
   })
 
-  // Group by company name to deduplicate across campaigns
-  const uniqueCompanies = new Map<string, ProspectRow[]>()
+  // Deduplicate: show each company once, using the most recent campaign entry
+  const uniqueCompanies = new Map<string, ProspectRow>()
   for (const p of filtered) {
     const key = p.domain || p.company_name
-    if (!uniqueCompanies.has(key)) uniqueCompanies.set(key, [])
-    uniqueCompanies.get(key)!.push(p)
+    if (!uniqueCompanies.has(key)) {
+      uniqueCompanies.set(key, p)
+    } else {
+      // Keep the one from the most recent campaign (latest created_at on prospect)
+      // Already sorted, so just keep first one (most recent due to order)
+    }
   }
 
   if (loading) {
@@ -95,7 +99,7 @@ export default function ProspectsPage() {
       <div className="flex items-center justify-between">
         <div>
           <p className="text-sm text-gray-500">
-            {prospects.length} companies across all campaigns
+            {uniqueCompanies.size} companies
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -125,12 +129,9 @@ export default function ProspectsPage() {
         </Card>
       ) : (
         <div className="grid gap-3">
-          {Array.from(uniqueCompanies.entries()).map(([key, entries]) => {
-            const primary = entries[0]
-            const totalContacts = entries.reduce((sum, e) => sum + e.contact_count, 0)
-
+          {Array.from(uniqueCompanies.entries()).map(([key, p]) => {
             return (
-              <Link key={key} href={`/prospects/${primary.id}`}>
+              <Link key={key} href={`/prospects/${p.id}`}>
                 <Card className="hover:border-blue-200 hover:shadow-sm transition-all cursor-pointer">
                   <CardContent className="flex items-center justify-between py-4 px-5">
                     <div className="flex items-center gap-4">
@@ -138,18 +139,18 @@ export default function ProspectsPage() {
                         <Building2 className="h-5 w-5 text-blue-600" />
                       </div>
                       <div>
-                        <h3 className="font-semibold text-gray-900">{primary.company_name}</h3>
+                        <h3 className="font-semibold text-gray-900">{p.company_name}</h3>
                         <div className="flex items-center gap-3 mt-0.5">
-                          {primary.domain && (
+                          {p.domain && (
                             <span className="text-sm text-gray-500 flex items-center gap-1">
-                              <Globe className="h-3 w-3" /> {primary.domain}
+                              <Globe className="h-3 w-3" /> {p.domain}
                             </span>
                           )}
-                          {primary.industry && (
-                            <span className="text-sm text-gray-500">{primary.industry}</span>
+                          {p.industry && (
+                            <span className="text-sm text-gray-500">{p.industry}</span>
                           )}
-                          {primary.country && (
-                            <span className="text-sm text-gray-500">{primary.country}</span>
+                          {p.country && (
+                            <span className="text-sm text-gray-500">{p.country}</span>
                           )}
                         </div>
                       </div>
@@ -157,22 +158,18 @@ export default function ProspectsPage() {
                     <div className="flex items-center gap-6">
                       <div className="flex items-center gap-1.5 text-sm">
                         <Users className="h-4 w-4 text-gray-400" />
-                        <span className="font-medium">{totalContacts}</span>
+                        <span className="font-medium">{p.contact_count}</span>
                         <span className="text-gray-400">contacts</span>
                       </div>
-                      <div className="flex gap-1.5">
-                        {entries.map(e => (
-                          <Badge key={e.id} variant="secondary" className="text-xs">
-                            {e.campaigns?.name || "Campaign"}
-                          </Badge>
-                        ))}
-                      </div>
+                      <Badge variant="secondary" className="text-xs">
+                        {p.campaigns?.name || "Campaign"}
+                      </Badge>
                       <Badge
-                        variant={primary.ai_research_status === "completed" ? "default" : "outline"}
-                        className={primary.ai_research_status === "completed" ? "bg-green-100 text-green-700 border-green-200" : ""}
+                        variant={p.ai_research_status === "completed" ? "default" : "outline"}
+                        className={p.ai_research_status === "completed" ? "bg-green-100 text-green-700 border-green-200" : ""}
                       >
-                        {primary.ai_research_status === "researching" && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
-                        {primary.ai_research_status}
+                        {p.ai_research_status === "researching" && <Loader2 className="h-3 w-3 animate-spin mr-1" />}
+                        {p.ai_research_status}
                       </Badge>
                       <ChevronRight className="h-5 w-5 text-gray-300" />
                     </div>

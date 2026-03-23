@@ -144,6 +144,49 @@ server.tool(
     })).describe("Companies to add"),
   },
   async ({ campaign_id, prospects }) => {
+    // Check for companies already in other campaigns with active sequences
+    const blocked: string[] = [];
+    for (const p of prospects) {
+      // Find existing prospects with same domain or company name in OTHER campaigns
+      let existingQuery = supabase
+        .from("prospects")
+        .select("id, campaign_id, company_name")
+        .neq("campaign_id", campaign_id);
+
+      if (p.domain) {
+        existingQuery = existingQuery.eq("domain", p.domain);
+      } else {
+        existingQuery = existingQuery.eq("company_name", p.company_name);
+      }
+
+      const { data: existing } = await existingQuery;
+
+      if (existing?.length) {
+        // Check if any of those campaigns have active sequences
+        for (const ex of existing) {
+          const { count } = await supabase
+            .from("sequences")
+            .select("id", { count: "exact", head: true })
+            .eq("campaign_id", ex.campaign_id)
+            .eq("status", "active");
+
+          if (count && count > 0) {
+            blocked.push(`${p.company_name} (active sequences in another campaign)`);
+            break;
+          }
+        }
+      }
+    }
+
+    if (blocked.length) {
+      return {
+        content: [{
+          type: "text",
+          text: `Cannot add these companies — they have contacts in active sequences in other campaigns:\n${blocked.map(b => `- ${b}`).join("\n")}\n\nPause or complete those sequences first, then try again.`,
+        }],
+      };
+    }
+
     const records = prospects.map(p => ({
       campaign_id,
       company_name: p.company_name,
