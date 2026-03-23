@@ -10,6 +10,16 @@ const server = new McpServer({
     name: "prospectapp",
     version: "1.0.0",
 });
+// Helper: run bulk DB updates in parallel batches for speed
+async function batchUpdate(items, table, batchSize = 50) {
+    let processed = 0;
+    for (let i = 0; i < items.length; i += batchSize) {
+        const batch = items.slice(i, i + batchSize);
+        await Promise.all(batch.map(item => supabase.from(table).update(item.updates).eq("id", item.id)));
+        processed += batch.length;
+    }
+    return processed;
+}
 // Helper: sync campaign status based on its sequences
 async function syncCampaignStatus(campaignId) {
     const { data: sequences } = await supabase
@@ -1055,18 +1065,18 @@ server.tool("bulk_strip_signature", "Strip matching text from all unsent email b
         return { content: [{ type: "text", text: `Invalid regex: ${err instanceof Error ? err.message : "parse error"}` }] };
     }
     const replaceWith = replacement || "";
-    let updated = 0;
+    const toUpdate = [];
     let skipped = 0;
     for (const email of emails) {
         const newBody = email.body.replace(regex, replaceWith).trimEnd();
         if (newBody !== email.body) {
-            await supabase.from("emails").update({ body: newBody }).eq("id", email.id);
-            updated++;
+            toUpdate.push({ id: email.id, updates: { body: newBody } });
         }
         else {
             skipped++;
         }
     }
+    const updated = await batchUpdate(toUpdate, "emails");
     return {
         content: [{
                 type: "text",
@@ -1455,6 +1465,7 @@ server.tool("recalculate_sequence_schedule", "Recalculate email schedules for a 
     }
     let totalRescheduled = 0;
     const scheduleLines = [];
+    const toSchedule = [];
     for (const step of steps) {
         const stepEmails = emailsByStep[step.id] || [];
         if (!stepEmails.length)
@@ -1466,15 +1477,16 @@ server.tool("recalculate_sequence_schedule", "Recalculate email schedules for a 
                 currentDate = nextSendDay(currentDate, 1);
                 assignedToday = 0;
             }
-            await supabase
-                .from("emails")
-                .update({ scheduled_for: currentDate.toISOString(), send_status: "scheduled" })
-                .eq("id", email.id);
+            toSchedule.push({
+                id: email.id,
+                updates: { scheduled_for: currentDate.toISOString(), send_status: "scheduled" },
+            });
             assignedToday++;
             totalRescheduled++;
         }
         scheduleLines.push(`Step ${step.step_number} (day ${step.delay_days}): ${stepEmails.length} emails, sends ${currentDate.toLocaleDateString()}`);
     }
+    await batchUpdate(toSchedule, "emails");
     return {
         content: [{
                 type: "text",
@@ -1583,14 +1595,12 @@ server.tool("recalculate_campaign_schedule", "Recalculate schedules for ALL sequ
     const warnings = [];
     // Track per-contact last send day to enforce step ordering
     const contactLastSendDay = new Map();
+    const campaignToSchedule = [];
     for (const [delayDays, bucketEmails] of Array.from(buckets.entries()).sort((a, b) => a[0] - b[0])) {
         let currentDate = nextSendDay(tzBase, delayDays);
         let assignedToday = 0;
         const dayKey = () => currentDate.toLocaleDateString();
-        // Check contact ordering: if a contact's previous step was scheduled,
-        // this step must be at least delay_days after
         for (const email of bucketEmails) {
-            // Enforce: this email's date must be >= contact's last send + gap
             const contactLast = contactLastSendDay.get(email.contact_id);
             if (contactLast && currentDate < contactLast) {
                 currentDate = new Date(contactLast);
@@ -1599,10 +1609,10 @@ server.tool("recalculate_campaign_schedule", "Recalculate schedules for ALL sequ
                 currentDate = nextSendDay(currentDate, 1);
                 assignedToday = 0;
             }
-            await supabase
-                .from("emails")
-                .update({ scheduled_for: currentDate.toISOString(), send_status: "scheduled" })
-                .eq("id", email.id);
+            campaignToSchedule.push({
+                id: email.id,
+                updates: { scheduled_for: currentDate.toISOString(), send_status: "scheduled" },
+            });
             contactLastSendDay.set(email.contact_id, nextSendDay(currentDate, 1));
             assignedToday++;
             totalRescheduled++;
@@ -1610,6 +1620,7 @@ server.tool("recalculate_campaign_schedule", "Recalculate schedules for ALL sequ
         const stepNames = Array.from(new Set(bucketEmails.map(e => `Step ${e.step_number}`))).join(", ");
         dayPlan.push({ day: dayKey(), count: bucketEmails.length, steps: stepNames });
     }
+    await batchUpdate(campaignToSchedule, "emails");
     // Check for capacity warnings
     const totalDays = dayPlan.length;
     const totalEmails = allEmails.length;
