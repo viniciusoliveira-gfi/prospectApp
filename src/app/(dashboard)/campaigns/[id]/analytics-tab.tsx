@@ -91,17 +91,18 @@ export function AnalyticsTab({ campaignId }: AnalyticsTabProps) {
 
     if (!steps?.length) { setLoading(false); return }
 
-    // Get all emails
+    // Get all emails (explicit high limit to avoid Supabase default truncation)
     const { data: emails } = await supabase
       .from("emails")
       .select("sequence_step_id, send_status, open_count, replied_at, bounced_at")
       .in("sequence_step_id", steps.map(s => s.id))
+      .limit(5000)
 
     if (!emails?.length) { setLoading(false); return }
 
-    // Calculate totals
+    // Calculate totals (queued + scheduled = pending)
     const sent = emails.filter(e => e.send_status === "sent").length
-    const scheduled = emails.filter(e => e.send_status === "scheduled").length
+    const scheduled = emails.filter(e => e.send_status === "scheduled" || e.send_status === "queued").length
     const opened = emails.filter(e => e.send_status === "sent" && e.open_count > 0).length
     const replied = emails.filter(e => e.replied_at).length
     const bounced = emails.filter(e => e.bounced_at).length
@@ -137,7 +138,7 @@ export function AnalyticsTab({ campaignId }: AnalyticsTabProps) {
       const seqStepIds = seqSteps.map(s => s.id)
       const seqEmails = emails.filter(e => seqStepIds.includes(e.sequence_step_id))
       const seqSent = seqEmails.filter(e => e.send_status === "sent").length
-      const seqScheduled = seqEmails.filter(e => e.send_status === "scheduled").length
+      const seqScheduled = seqEmails.filter(e => e.send_status === "scheduled" || e.send_status === "queued").length
       const seqOpened = seqEmails.filter(e => e.send_status === "sent" && e.open_count > 0).length
       const seqReplied = seqEmails.filter(e => e.replied_at).length
       const seqBounced = seqEmails.filter(e => e.bounced_at).length
@@ -160,7 +161,7 @@ export function AnalyticsTab({ campaignId }: AnalyticsTabProps) {
       for (const step of seqSteps) {
         const stepEmails = emails.filter(e => e.sequence_step_id === step.id)
         const sSent = stepEmails.filter(e => e.send_status === "sent").length
-        const sScheduled = stepEmails.filter(e => e.send_status === "scheduled").length
+        const sScheduled = stepEmails.filter(e => e.send_status === "scheduled" || e.send_status === "queued").length
         const sOpened = stepEmails.filter(e => e.send_status === "sent" && e.open_count > 0).length
         const sReplied = stepEmails.filter(e => e.replied_at).length
         const sBounced = stepEmails.filter(e => e.bounced_at).length
