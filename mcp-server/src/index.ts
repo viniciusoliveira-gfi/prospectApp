@@ -1975,14 +1975,7 @@ server.tool(
 
     if (!allEmails.length) return { content: [{ type: "text", text: "No unsent emails to schedule." }] };
 
-    // 4. Sort emails: by delay_days first (step 1 before step 2), then by sequence
-    allEmails.sort((a, b) => {
-      if (a.delay_days !== b.delay_days) return a.delay_days - b.delay_days;
-      if (a.step_number !== b.step_number) return a.step_number - b.step_number;
-      return 0;
-    });
-
-    // 5. Build day-by-day plan
+    // 4. Helper functions
     const baseDate = new Date();
     const tzBase = new Date(baseDate.toLocaleString("en-US", { timeZone: timezone }));
 
@@ -1998,71 +1991,154 @@ server.tool(
       return target;
     }
 
-    // Group by delay_days bucket (all step 1s together, all step 2s, etc.)
-    const buckets = new Map<number, EmailToSchedule[]>();
-    for (const email of allEmails) {
-      if (!buckets.has(email.delay_days)) buckets.set(email.delay_days, []);
-      buckets.get(email.delay_days)!.push(email);
+    function dateKey(d: Date): string {
+      return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
     }
 
-    let totalRescheduled = 0;
-    const dayPlan: { day: string; count: number; steps: string }[] = [];
-    const warnings: string[] = [];
+    // 5. Schedule Step 1 first, then cascade later steps per contact
 
-    // Track per-contact last send day to enforce step ordering
-    const contactLastSendDay = new Map<string, Date>();
+    // Group emails by contact_id, then sort steps within each contact
+    const emailsByContact = new Map<string, EmailToSchedule[]>();
+    for (const email of allEmails) {
+      if (!emailsByContact.has(email.contact_id)) emailsByContact.set(email.contact_id, []);
+      emailsByContact.get(email.contact_id)!.push(email);
+    }
+    // Sort each contact's emails by step_number
+    for (const [, contactEmails] of Array.from(emailsByContact)) {
+      contactEmails.sort((a, b) => a.step_number - b.step_number);
+    }
+
+    // Separate step 1 emails from later steps
+    const step1Emails: EmailToSchedule[] = [];
+    const laterEmails = new Map<string, EmailToSchedule[]>(); // contact_id -> [step 2, 3, 4...]
+    for (const [contactId, contactEmails] of Array.from(emailsByContact)) {
+      for (const email of contactEmails) {
+        if (email.step_number === 1) {
+          step1Emails.push(email);
+        } else {
+          if (!laterEmails.has(contactId)) laterEmails.set(contactId, []);
+          laterEmails.get(contactId)!.push(email);
+        }
+      }
+    }
+
+    // Track capacity per day (key = dateKey)
+    const dayCapacity = new Map<string, number>();
+    function getAvailableDay(startFrom: Date): Date {
+      let candidate = new Date(startFrom);
+      candidate.setHours(hoursStart, 0, 0, 0);
+      // Ensure it's a send day
+      let safety = 0;
+      while (!sendDays.includes(String(candidate.getDay())) && safety < 7) {
+        candidate.setDate(candidate.getDate() + 1);
+        safety++;
+      }
+      // Find a day with capacity
+      safety = 0;
+      while ((dayCapacity.get(dateKey(candidate)) || 0) >= totalDailyCapacity && safety < 365) {
+        candidate.setDate(candidate.getDate() + 1);
+        // Skip non-send days
+        while (!sendDays.includes(String(candidate.getDay()))) {
+          candidate.setDate(candidate.getDate() + 1);
+        }
+        safety++;
+      }
+      return candidate;
+    }
+
+    function assignToDay(d: Date) {
+      const key = dateKey(d);
+      dayCapacity.set(key, (dayCapacity.get(key) || 0) + 1);
+    }
+
+    // Track per-contact step dates for cadence enforcement
+    const contactStepDates = new Map<string, Map<number, Date>>(); // contact_id -> step_number -> date
 
     const campaignToSchedule: { id: string; updates: Record<string, unknown> }[] = [];
+    let totalRescheduled = 0;
 
-    for (const [delayDays, bucketEmails] of Array.from(buckets.entries()).sort((a, b) => a[0] - b[0])) {
-      let currentDate = nextSendDay(tzBase, delayDays);
-      let assignedToday = 0;
-      const dayKey = () => currentDate.toLocaleDateString();
+    // 6. Schedule all Step 1 emails, filling days up to capacity
+    const step1Start = nextSendDay(tzBase, 0);
+    for (const email of step1Emails) {
+      const sendDate = getAvailableDay(step1Start);
+      assignToDay(sendDate);
 
-      for (const email of bucketEmails) {
-        const contactLast = contactLastSendDay.get(email.contact_id);
-        if (contactLast && currentDate < contactLast) {
-          currentDate = new Date(contactLast);
+      campaignToSchedule.push({
+        id: email.id,
+        updates: { scheduled_for: sendDate.toISOString(), send_status: "scheduled" },
+      });
+
+      if (!contactStepDates.has(email.contact_id)) contactStepDates.set(email.contact_id, new Map());
+      contactStepDates.get(email.contact_id)!.set(email.step_number, new Date(sendDate));
+      totalRescheduled++;
+    }
+
+    // 7. Schedule later steps per contact, respecting cadence + capacity
+    // Get all unique step configs across sequences for delay gap calculation
+    const stepConfigs: { step_number: number; delay_days: number }[] = [];
+    for (const seq of sequences) {
+      const steps = ((seq.sequence_steps || []) as { step_number: number; delay_days: number }[]);
+      for (const s of steps) {
+        if (!stepConfigs.find(sc => sc.step_number === s.step_number)) {
+          stepConfigs.push(s);
         }
+      }
+    }
+    stepConfigs.sort((a, b) => a.step_number - b.step_number);
 
-        if (assignedToday >= totalDailyCapacity) {
-          currentDate = nextSendDay(currentDate, 1);
-          assignedToday = 0;
-        }
+    for (const [contactId, contactLaterEmails] of Array.from(laterEmails)) {
+      const stepDates = contactStepDates.get(contactId);
+      if (!stepDates) continue; // no step 1 — skip
+
+      for (const email of contactLaterEmails) {
+        // Find the previous step's date for this contact
+        const prevStepDate = stepDates.get(email.step_number - 1);
+        if (!prevStepDate) continue;
+
+        // Calculate gap: this step's delay_days - previous step's delay_days
+        const thisStepConfig = stepConfigs.find(s => s.step_number === email.step_number);
+        const prevStepConfig = stepConfigs.find(s => s.step_number === email.step_number - 1);
+        const gap = (thisStepConfig?.delay_days || 0) - (prevStepConfig?.delay_days || 0);
+
+        // Earliest date = previous step date + gap days
+        const earliestDate = nextSendDay(prevStepDate, gap);
+        const sendDate = getAvailableDay(earliestDate);
+        assignToDay(sendDate);
 
         campaignToSchedule.push({
           id: email.id,
-          updates: { scheduled_for: currentDate.toISOString(), send_status: "scheduled" },
+          updates: { scheduled_for: sendDate.toISOString(), send_status: "scheduled" },
         });
 
-        contactLastSendDay.set(email.contact_id, nextSendDay(currentDate, 1));
-        assignedToday++;
+        stepDates.set(email.step_number, new Date(sendDate));
         totalRescheduled++;
       }
-
-      const stepNames = Array.from(new Set(bucketEmails.map(e => `Step ${e.step_number}`))).join(", ");
-      dayPlan.push({ day: dayKey(), count: bucketEmails.length, steps: stepNames });
     }
 
     await batchUpdate(campaignToSchedule, "emails");
 
-    // Check for capacity warnings
-    const totalDays = dayPlan.length;
+    // 8. Build day-by-day report
+    const warnings: string[] = [];
+    const sortedDays = Array.from(dayCapacity.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+
     const totalEmails = allEmails.length;
     if (totalEmails > totalDailyCapacity * 5) {
-      warnings.push(`High volume: ${totalEmails} emails will take ${Math.ceil(totalEmails / totalDailyCapacity)} send days at current capacity`);
+      warnings.push(`High volume: ${totalEmails} emails across ${sortedDays.length} send days`);
     }
 
-    // 6. Build report
     let report = `**${campaign.name}** — Campaign Schedule Recalculated\n\n`;
     report += `**Capacity:** ${totalDailyCapacity}/day (${senderAccounts.length} accounts × ${dailyLimitPerAccount}/day)\n`;
     report += `**Emails:** ${totalRescheduled} rescheduled across ${sequenceInfo.length} sequence(s)\n`;
+    report += `**Contacts:** ${emailsByContact.size}\n`;
     report += `**Send days:** ${sendDays.map((d: string) => ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][parseInt(d)]).join(", ")}\n`;
-    report += `**Timezone:** ${timezone}\n\n`;
+    report += `**Timezone:** ${timezone}\n`;
+    report += `**Total send days needed:** ${sortedDays.length}\n\n`;
 
     report += `**Day-by-day plan:**\n`;
-    for (const dp of dayPlan) {
-      report += `  ${dp.day}: ${dp.count} emails (${dp.steps})\n`;
+    for (const [key, count] of sortedDays) {
+      const parts = key.split("-").map(Number);
+      const d = new Date(parts[0], parts[1], parts[2]);
+      report += `  ${d.toLocaleDateString()}: ${count} emails\n`;
     }
 
     if (warnings.length) {
