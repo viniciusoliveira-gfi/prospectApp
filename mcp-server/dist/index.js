@@ -310,20 +310,12 @@ server.tool("update_sequence_step", "Update a specific step's subject, body temp
         .single();
     if (error)
         return { content: [{ type: "text", text: `Error: ${error.message}` }] };
-    // If delay_days changed, recalculate all unsent email schedules
-    let recalcResult = "";
+    // If delay_days changed, tell user to recalculate
+    let recalcNote = "";
     if (updates.delay_days !== undefined) {
-        const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
-        try {
-            const res = await fetch(`${appUrl}/api/sequences/${sequence_id}/recalculate`, { method: "POST" });
-            const rData = await res.json();
-            recalcResult = ` ${rData.rescheduled || 0} emails rescheduled.`;
-        }
-        catch {
-            recalcResult = " (schedule recalculation failed — run recalculate_sequence_schedule manually)";
-        }
+        recalcNote = " delay_days changed — run recalculate_sequence_schedule to update email schedules.";
     }
-    return { content: [{ type: "text", text: `Step ${step_number} updated.${recalcResult}` }] };
+    return { content: [{ type: "text", text: `Step ${step_number} updated.${recalcNote}` }] };
 });
 // ============================================================
 // SEQUENCE ACTIVATION — start, pause, resume, status
@@ -1011,25 +1003,104 @@ server.tool("update_settings", "Update global sending settings (timezone, hours,
         return { content: [{ type: "text", text: `Error: ${error.message}` }] };
     return { content: [{ type: "text", text: "Settings updated." }] };
 });
-server.tool("recalculate_sequence_schedule", "Recalculate email schedules for a sequence based on current settings (sender accounts, daily limits, send days). Use after changing campaign or global settings.", {
+server.tool("recalculate_sequence_schedule", "Recalculate email schedules for a sequence based on current settings (sender accounts, daily limits, send days). Use after changing campaign or global settings, or after updating step delay_days.", {
     sequence_id: z.string(),
 }, async ({ sequence_id }) => {
-    const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
-    try {
-        const res = await fetch(`${appUrl}/api/sequences/${sequence_id}/recalculate`, { method: "POST" });
-        const data = await res.json();
-        if (!res.ok)
-            return { content: [{ type: "text", text: `Error: ${data.error || "Recalculation failed"}` }] };
-        return {
-            content: [{
-                    type: "text",
-                    text: `Schedule recalculated: ${data.rescheduled} emails rescheduled.\nDaily capacity: ${data.daily_capacity} (${data.accounts} accounts × ${data.limit_per_account}/day)\n${data.schedule?.map((s) => `Step ${s.step}: ${s.count} emails, last day: ${s.day}`).join("\n") || ""}`,
-                }],
-        };
+    // Get sequence with steps
+    const { data: sequence, error: seqErr } = await supabase
+        .from("sequences")
+        .select("*, sequence_steps(*)")
+        .eq("id", sequence_id)
+        .single();
+    if (seqErr || !sequence)
+        return { content: [{ type: "text", text: "Sequence not found." }] };
+    // Get campaign settings
+    const { data: campaign } = await supabase
+        .from("campaigns")
+        .select("send_settings, sending_account, daily_send_limit")
+        .eq("id", sequence.campaign_id)
+        .single();
+    const ss = (campaign?.send_settings || {});
+    // Get global settings as fallback
+    const { data: globalSettings } = await supabase
+        .from("settings")
+        .select("value")
+        .eq("key", "sending_defaults")
+        .single();
+    const g = (globalSettings?.value || {});
+    const senderAccounts = ss.sender_accounts?.length
+        ? ss.sender_accounts
+        : campaign?.sending_account ? [campaign.sending_account] : ["_default"];
+    const dailyLimitPerAccount = ss.daily_limit_per_account
+        || parseInt(g.daily_limit_per_account || g.daily_limit || "25");
+    const sendDays = ss.send_days?.length
+        ? ss.send_days
+        : g.send_days ? JSON.parse(g.send_days) : ["1", "2", "3", "4", "5"];
+    const hoursStart = ss.send_hours_start ?? parseInt(g.hours_start || "9");
+    const timezone = ss.timezone || g.timezone || "America/Sao_Paulo";
+    const dailyCapacity = senderAccounts.length * dailyLimitPerAccount;
+    // Get steps sorted
+    const steps = (sequence.sequence_steps || [])
+        .sort((a, b) => a.step_number - b.step_number);
+    if (!steps.length)
+        return { content: [{ type: "text", text: "No steps found." }] };
+    // Get unsent emails
+    const stepIds = steps.map(s => s.id);
+    const { data: emails } = await supabase
+        .from("emails")
+        .select("id, sequence_step_id")
+        .in("sequence_step_id", stepIds)
+        .in("send_status", ["queued", "scheduled"]);
+    if (!emails?.length)
+        return { content: [{ type: "text", text: "No unsent emails to schedule." }] };
+    // Base date: use sequence started_at or now
+    const baseDate = sequence.started_at ? new Date(sequence.started_at) : new Date();
+    const tzBase = new Date(baseDate.toLocaleString("en-US", { timeZone: timezone }));
+    // Helper: find next valid send day
+    function nextSendDay(from, addDays) {
+        const target = new Date(from);
+        target.setDate(target.getDate() + addDays);
+        target.setHours(hoursStart, 0, 0, 0);
+        let safety = 0;
+        while (!sendDays.includes(String(target.getDay())) && safety < 7) {
+            target.setDate(target.getDate() + 1);
+            safety++;
+        }
+        return target;
     }
-    catch (err) {
-        return { content: [{ type: "text", text: `Failed: ${err instanceof Error ? err.message : "Unknown error"}` }] };
+    // Group emails by step
+    const emailsByStep = {};
+    for (const step of steps) {
+        emailsByStep[step.id] = emails.filter(e => e.sequence_step_id === step.id);
     }
+    let totalRescheduled = 0;
+    const scheduleLines = [];
+    for (const step of steps) {
+        const stepEmails = emailsByStep[step.id] || [];
+        if (!stepEmails.length)
+            continue;
+        let currentDate = nextSendDay(tzBase, step.delay_days);
+        let assignedToday = 0;
+        for (const email of stepEmails) {
+            if (assignedToday >= dailyCapacity) {
+                currentDate = nextSendDay(currentDate, 1);
+                assignedToday = 0;
+            }
+            await supabase
+                .from("emails")
+                .update({ scheduled_for: currentDate.toISOString(), send_status: "scheduled" })
+                .eq("id", email.id);
+            assignedToday++;
+            totalRescheduled++;
+        }
+        scheduleLines.push(`Step ${step.step_number} (day ${step.delay_days}): ${stepEmails.length} emails, sends ${currentDate.toLocaleDateString()}`);
+    }
+    return {
+        content: [{
+                type: "text",
+                text: `Schedule recalculated: ${totalRescheduled} emails rescheduled.\nDaily capacity: ${dailyCapacity} (${senderAccounts.length} accounts × ${dailyLimitPerAccount}/day)\n\n${scheduleLines.join("\n")}`,
+            }],
+    };
 });
 // ============================================================
 // PROSPECT RESEARCH DOSSIERS
