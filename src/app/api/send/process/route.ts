@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { sendEmail, GMAIL_LIMITS } from '@/lib/gmail'
+import { syncCampaignStatus } from '@/lib/campaign-status'
 
 export async function POST() {
   const supabase = createAdminClient()
@@ -305,6 +306,10 @@ ${email.body.replace(/\n/g, '<br/>')}
         .from('sequences')
         .update({ status: 'completed', completed_at: new Date().toISOString() })
         .eq('id', seqId)
+
+      // Sync campaign status
+      const campaignId = sequenceCampaignMap[seqId]
+      if (campaignId) await syncCampaignStatus(campaignId)
     }
   }
 

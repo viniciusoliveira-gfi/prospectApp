@@ -14,6 +14,25 @@ const server = new McpServer({
   version: "1.0.0",
 });
 
+// Helper: sync campaign status based on its sequences
+async function syncCampaignStatus(campaignId: string) {
+  const { data: sequences } = await supabase
+    .from("sequences")
+    .select("status")
+    .eq("campaign_id", campaignId);
+
+  if (!sequences?.length) return;
+
+  const statuses = sequences.map(s => s.status);
+  let campaignStatus: string;
+  if (statuses.includes("active")) campaignStatus = "active";
+  else if (statuses.every(s => s === "completed")) campaignStatus = "completed";
+  else if (statuses.every(s => s === "paused" || s === "completed")) campaignStatus = "paused";
+  else campaignStatus = "draft";
+
+  await supabase.from("campaigns").update({ status: campaignStatus }).eq("id", campaignId);
+}
+
 // ============================================================
 // CAMPAIGNS
 // ============================================================
@@ -584,6 +603,8 @@ server.tool(
       started_at: now.toISOString(),
     }).eq("id", sequence_id);
 
+    await syncCampaignStatus(sequence.campaign_id);
+
     const scheduleLines = steps.map(s => {
       const d = new Date(now);
       if (s.delay_days === 0) {
@@ -608,7 +629,7 @@ server.tool(
     sequence_id: z.string(),
   },
   async ({ sequence_id }) => {
-    const { data: sequence } = await supabase.from("sequences").select("status").eq("id", sequence_id).single();
+    const { data: sequence } = await supabase.from("sequences").select("status, campaign_id").eq("id", sequence_id).single();
     if (!sequence) return { content: [{ type: "text", text: "Sequence not found." }] };
     if (sequence.status !== "active") {
       return { content: [{ type: "text", text: `Cannot pause: sequence is "${sequence.status}", must be "active".` }] };
@@ -618,6 +639,8 @@ server.tool(
       status: "paused",
       paused_at: new Date().toISOString(),
     }).eq("id", sequence_id);
+
+    await syncCampaignStatus(sequence.campaign_id);
 
     return { content: [{ type: "text", text: "Sequence paused. No further emails will be sent until resumed." }] };
   }
@@ -665,6 +688,8 @@ server.tool(
       status: "active",
       paused_at: null,
     }).eq("id", sequence_id);
+
+    await syncCampaignStatus(sequence.campaign_id);
 
     return {
       content: [{

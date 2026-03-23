@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { recalculateSchedulesAfterResume } from '@/lib/scheduling'
+import { syncCampaignStatus } from '@/lib/campaign-status'
 
 // POST /api/sequences/[id]/pause?action=pause|resume
 export async function POST(
@@ -37,6 +38,7 @@ export async function POST(
       .update({ status: 'paused', paused_at: now.toISOString() })
       .eq('id', sequenceId)
 
+    await syncCampaignStatus(sequence.campaign_id)
     return NextResponse.json({ message: 'Sequence paused', paused_at: now.toISOString() })
   }
 
@@ -79,6 +81,8 @@ export async function POST(
       .from('sequences')
       .update({ status: 'active', paused_at: null })
       .eq('id', sequenceId)
+
+    await syncCampaignStatus(sequence.campaign_id)
 
     return NextResponse.json({
       message: 'Sequence resumed',

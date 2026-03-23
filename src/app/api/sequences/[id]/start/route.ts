@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { checkSequenceReadiness } from '@/lib/scheduling'
+import { syncCampaignStatus } from '@/lib/campaign-status'
 
 export async function POST(
   _request: Request,
@@ -128,6 +129,9 @@ export async function POST(
       started_at: now.toISOString(),
     })
     .eq('id', sequenceId)
+
+  // Sync campaign status
+  await syncCampaignStatus(sequence.campaign_id)
 
   // Smart schedule: distribute emails across days respecting daily limits
   // Resolve campaign + global settings
