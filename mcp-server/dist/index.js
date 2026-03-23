@@ -1415,6 +1415,17 @@ server.tool("list_experiments", "List all experiments, optionally filtered by ca
     });
     return { content: [{ type: "text", text: lines.join("\n\n") }] };
 });
+server.tool("delete_experiment", "Delete an experiment and all its assignments. Emails tagged with this experiment will have their experiment_id set to null.", {
+    experiment_id: z.string(),
+}, async ({ experiment_id }) => {
+    const { data: exp } = await supabase.from("experiments").select("name, status").eq("id", experiment_id).single();
+    if (!exp)
+        return { content: [{ type: "text", text: "Experiment not found." }] };
+    const { error } = await supabase.from("experiments").delete().eq("id", experiment_id);
+    if (error)
+        return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+    return { content: [{ type: "text", text: `Experiment "${exp.name}" deleted. Assignments removed, email tags cleared.` }] };
+});
 // ============================================================
 // GROWTH PLAYBOOK
 // ============================================================
