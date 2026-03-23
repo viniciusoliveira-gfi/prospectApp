@@ -1023,6 +1023,57 @@ server.tool("get_campaign_email_audit", "Audit all emails in a campaign to surfa
     }
     return { content: [{ type: "text", text: report }] };
 });
+server.tool("bulk_strip_signature", "Strip matching text from all unsent email bodies in a campaign using a regex pattern. Use this to remove old signatures, footers, or unwanted text in bulk.", {
+    campaign_id: z.string(),
+    pattern: z.string().describe("Regex pattern to match and remove. Example: '\\n\\n--\\n[\\s\\S]*$' to strip everything after \\n\\n--\\n"),
+    replacement: z.string().optional().describe("Replace matched text with this (default: empty string)"),
+    include_sent: z.boolean().optional().describe("Also strip from sent emails (default: false, only unsent)"),
+}, async ({ campaign_id, pattern, replacement, include_sent }) => {
+    // Get all sequences + steps for this campaign
+    const { data: seqs } = await supabase.from("sequences").select("id").eq("campaign_id", campaign_id);
+    if (!seqs?.length)
+        return { content: [{ type: "text", text: "No sequences in this campaign." }] };
+    const { data: steps } = await supabase.from("sequence_steps").select("id").in("sequence_id", seqs.map(s => s.id));
+    if (!steps?.length)
+        return { content: [{ type: "text", text: "No steps found." }] };
+    // Get emails
+    const statusFilter = include_sent
+        ? ["queued", "scheduled", "sent"]
+        : ["queued", "scheduled"];
+    const { data: emails } = await supabase
+        .from("emails")
+        .select("id, body")
+        .in("sequence_step_id", steps.map(s => s.id))
+        .in("send_status", statusFilter);
+    if (!emails?.length)
+        return { content: [{ type: "text", text: "No emails found matching criteria." }] };
+    let regex;
+    try {
+        regex = new RegExp(pattern, "g");
+    }
+    catch (err) {
+        return { content: [{ type: "text", text: `Invalid regex: ${err instanceof Error ? err.message : "parse error"}` }] };
+    }
+    const replaceWith = replacement || "";
+    let updated = 0;
+    let skipped = 0;
+    for (const email of emails) {
+        const newBody = email.body.replace(regex, replaceWith).trimEnd();
+        if (newBody !== email.body) {
+            await supabase.from("emails").update({ body: newBody }).eq("id", email.id);
+            updated++;
+        }
+        else {
+            skipped++;
+        }
+    }
+    return {
+        content: [{
+                type: "text",
+                text: `Stripped pattern from ${updated} emails. ${skipped} emails had no match (unchanged). Total scanned: ${emails.length}.`,
+            }],
+    };
+});
 // ============================================================
 // CAMPAIGN SEND SETTINGS
 // ============================================================
