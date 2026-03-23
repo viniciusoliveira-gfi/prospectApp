@@ -94,6 +94,7 @@ export async function POST() {
   // Track which sender was used for each prospect
   const prospectSenderMap: Record<string, string> = {}
   const senderSentCount: Record<string, number> = {}
+  const sentDedupSet = new Set<string>() // track contact_id:step_id to prevent duplicates
 
   const { data: activeSteps } = await supabase
     .from('sequence_steps')
@@ -221,17 +222,38 @@ ${email.body.replace(/\n/g, '<br/>')}
             fromAlias = sorted[0]
             prospectSenderMap[prospectKey] = fromAlias
           }
-          senderSentCount[fromAlias] = (senderSentCount[fromAlias] || 0) + 1
         } else if (config?.sending_account) {
           fromAlias = config.sending_account
         }
       }
 
-      // Check per-account daily limit
+      // Check per-account daily limit BEFORE sending
       const senderKey = fromAlias || '_default'
       const accountSentToday = (perAccountSentToday[senderKey] || 0) + (senderSentCount[senderKey] || 0)
       if (accountSentToday >= dailyLimit) {
         results.push({ id: email.id, status: 'skipped_limit', error: `Account ${senderKey} hit daily limit (${dailyLimit})` })
+        continue
+      }
+
+      // Dedup: skip if we already sent to this contact for this step (in this batch OR in DB)
+      const dedupKey = `${email.contact_id}:${email.sequence_step_id}`
+      if (sentDedupSet.has(dedupKey)) {
+        await supabase.from('emails').update({ send_status: 'skipped', error_message: 'Duplicate — already sent to this contact for this step' }).eq('id', email.id)
+        results.push({ id: email.id, status: 'skipped', error: 'Duplicate contact+step in batch' })
+        continue
+      }
+
+      // Also check DB: has this contact already received this step?
+      const { count: alreadySent } = await supabase
+        .from('emails')
+        .select('id', { count: 'exact', head: true })
+        .eq('contact_id', email.contact_id)
+        .eq('sequence_step_id', email.sequence_step_id)
+        .eq('send_status', 'sent')
+
+      if (alreadySent && alreadySent > 0) {
+        await supabase.from('emails').update({ send_status: 'skipped', error_message: 'Duplicate — contact already received this step' }).eq('id', email.id)
+        results.push({ id: email.id, status: 'skipped', error: 'Duplicate — already sent in DB' })
         continue
       }
 
@@ -266,6 +288,10 @@ ${email.body.replace(/\n/g, '<br/>')}
 
       sentCount++
       results.push({ id: email.id, status: 'sent' })
+
+      // Track: increment sender count and mark contact+step as sent
+      senderSentCount[senderKey] = (senderSentCount[senderKey] || 0) + 1
+      sentDedupSet.add(dedupKey)
 
       // Update experiment assignment counters
       if (email.experiment_id && email.contact_id) {
