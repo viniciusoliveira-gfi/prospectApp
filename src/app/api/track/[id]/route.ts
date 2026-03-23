@@ -20,7 +20,7 @@ export async function GET(
     supabase.rpc('increment_open_count', { email_tracking_id: trackingId }).then(async () => {
       const { data } = await supabase
         .from('emails')
-        .select('id, contact_id, prospect_id')
+        .select('id, contact_id, prospect_id, experiment_id, open_count')
         .eq('tracking_pixel_id', trackingId)
         .single()
 
@@ -31,6 +31,16 @@ export async function GET(
           prospect_id: data.prospect_id,
           action: 'email_opened',
         })
+
+        // Update experiment assignment opens (only on first open)
+        if (data.experiment_id && data.open_count <= 1) {
+          try {
+            await supabase.rpc('increment_experiment_opened', {
+              p_experiment_id: data.experiment_id,
+              p_contact_id: data.contact_id,
+            })
+          } catch { /* best-effort */ }
+        }
       }
     })
   } catch {

@@ -102,11 +102,10 @@ export async function POST() {
           // Update experiment assignment if applicable
           if (email.experiment_id) {
             try {
-              await supabase
-                .from('experiment_assignments')
-                .update({ emails_replied: 1 })
-                .eq('experiment_id', email.experiment_id)
-                .eq('contact_id', email.contact_id)
+              await supabase.rpc('increment_experiment_replied', {
+                p_experiment_id: email.experiment_id,
+                p_contact_id: email.contact_id,
+              })
             } catch { /* best-effort */ }
           }
 
