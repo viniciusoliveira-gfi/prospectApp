@@ -633,7 +633,38 @@ server.tool("push_emails", "Push personalized emails into the approval queue for
     const { data, error } = await supabase.from("emails").insert(records).select();
     if (error)
         return { content: [{ type: "text", text: `Error: ${error.message}` }] };
-    return { content: [{ type: "text", text: `Pushed ${data.length} emails to the approval queue.` }] };
+    // If the sequence is active, auto-schedule the new emails
+    let scheduleNote = "";
+    const { data: stepData } = await supabase
+        .from("sequence_steps")
+        .select("sequence_id, delay_days")
+        .eq("id", sequence_step_id)
+        .single();
+    if (stepData) {
+        const { data: seq } = await supabase.from("sequences").select("status, started_at, campaign_id").eq("id", stepData.sequence_id).single();
+        if (seq?.status === "active" && seq.started_at) {
+            // Find what date other emails in this step are scheduled for
+            const { data: existingScheduled } = await supabase
+                .from("emails")
+                .select("scheduled_for")
+                .eq("sequence_step_id", sequence_step_id)
+                .eq("send_status", "scheduled")
+                .not("scheduled_for", "is", null)
+                .limit(1);
+            if (existingScheduled?.length && existingScheduled[0].scheduled_for) {
+                // Use the same date as other emails in this step
+                const schedDate = existingScheduled[0].scheduled_for;
+                for (const email of data) {
+                    await supabase.from("emails").update({
+                        send_status: "scheduled",
+                        scheduled_for: schedDate,
+                    }).eq("id", email.id);
+                }
+                scheduleNote = ` Auto-scheduled for ${new Date(schedDate).toLocaleDateString()}.`;
+            }
+        }
+    }
+    return { content: [{ type: "text", text: `Pushed ${data.length} emails to the approval queue.${scheduleNote}` }] };
 });
 server.tool("push_all_emails_for_sequence", "Push personalized emails for ALL contacts and ALL steps in a sequence at once. Include metadata for strategy tracking and experiment tags.", {
     sequence_id: z.string().describe("Sequence ID"),
@@ -683,7 +714,34 @@ server.tool("push_all_emails_for_sequence", "Push personalized emails for ALL co
     const { data, error } = await supabase.from("emails").insert(records).select();
     if (error)
         return { content: [{ type: "text", text: `Error: ${error.message}` }] };
-    return { content: [{ type: "text", text: `Pushed ${data.length} emails across ${steps.length} steps to the approval queue.` }] };
+    // If the sequence is active, auto-schedule new emails by matching existing step dates
+    let scheduleNote = "";
+    const { data: seq } = await supabase.from("sequences").select("status, started_at").eq("id", sequence_id).single();
+    if (seq?.status === "active" && seq.started_at) {
+        let scheduled = 0;
+        for (const step of steps) {
+            const { data: existingScheduled } = await supabase
+                .from("emails")
+                .select("scheduled_for")
+                .eq("sequence_step_id", step.id)
+                .eq("send_status", "scheduled")
+                .not("scheduled_for", "is", null)
+                .limit(1);
+            if (existingScheduled?.length && existingScheduled[0].scheduled_for) {
+                const stepEmails = data.filter((e) => e.sequence_step_id === step.id);
+                for (const email of stepEmails) {
+                    await supabase.from("emails").update({
+                        send_status: "scheduled",
+                        scheduled_for: existingScheduled[0].scheduled_for,
+                    }).eq("id", email.id);
+                    scheduled++;
+                }
+            }
+        }
+        if (scheduled > 0)
+            scheduleNote = ` Auto-scheduled ${scheduled} emails to match existing step dates.`;
+    }
+    return { content: [{ type: "text", text: `Pushed ${data.length} emails across ${steps.length} steps to the approval queue.${scheduleNote}` }] };
 });
 server.tool("list_emails", "List emails with their approval and send status", {
     campaign_id: z.string().optional(),
