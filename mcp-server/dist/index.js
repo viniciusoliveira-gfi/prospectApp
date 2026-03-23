@@ -54,6 +54,17 @@ server.tool("update_campaign", "Update campaign status, name, description, or se
     daily_send_limit: z.number().optional(),
     send_interval_minutes: z.number().optional(),
 }, async ({ campaign_id, ...updates }) => {
+    // If archiving/deleting, check for active sequences
+    if (updates.status === "archived") {
+        const { count } = await supabase
+            .from("sequences")
+            .select("id", { count: "exact", head: true })
+            .eq("campaign_id", campaign_id)
+            .eq("status", "active");
+        if (count && count > 0) {
+            return { content: [{ type: "text", text: "Cannot archive: campaign has active sequences. Pause them first." }] };
+        }
+    }
     const clean = Object.fromEntries(Object.entries(updates).filter(([, v]) => v !== undefined));
     const { data, error } = await supabase.from("campaigns").update(clean).eq("id", campaign_id).select().single();
     if (error)
@@ -837,14 +848,14 @@ server.tool("get_email_detail", "Get full details of a specific email including 
 // ============================================================
 // DELETE SEQUENCE
 // ============================================================
-server.tool("delete_sequence", "Delete a sequence and all its steps and emails. Only works for draft sequences.", {
+server.tool("delete_sequence", "Delete a sequence and all its steps and emails. Cannot delete active sequences — pause or stop them first.", {
     sequence_id: z.string(),
 }, async ({ sequence_id }) => {
     const { data: seq } = await supabase.from("sequences").select("status, name").eq("id", sequence_id).single();
     if (!seq)
         return { content: [{ type: "text", text: "Sequence not found." }] };
-    if (seq.status !== "draft") {
-        return { content: [{ type: "text", text: `Cannot delete: sequence is "${seq.status}". Only draft sequences can be deleted.` }] };
+    if (seq.status === "active") {
+        return { content: [{ type: "text", text: `Cannot delete: sequence is active. Pause it first, then delete.` }] };
     }
     const { error } = await supabase.from("sequences").delete().eq("id", sequence_id);
     if (error)
@@ -1143,8 +1154,8 @@ server.tool("get_prospect_research", "Get the structured research dossier for a 
 // ============================================================
 // EXPERIMENT ENGINE
 // ============================================================
-server.tool("create_experiment", "Create an A/B/C/D experiment to test a hypothesis. Claude should create experiments to systematically test what works.", {
-    campaign_id: z.string().optional(),
+server.tool("create_experiment", "Create an A/B/C/D experiment to test a hypothesis. Only 1 experiment per campaign is allowed. campaign_id is required.", {
+    campaign_id: z.string().describe("Campaign ID — required, 1 experiment per campaign"),
     name: z.string(),
     description: z.string().optional(),
     test_dimension: z.string().describe("e.g., 'fomo_style', 'tone', 'value_prop', 'subject_style', 'email_length', 'cta_style', 'sequence_timing'"),
@@ -1159,6 +1170,17 @@ server.tool("create_experiment", "Create an A/B/C/D experiment to test a hypothe
     secondary_metrics: z.array(z.string()).optional(),
     min_sample_per_variant: z.number().optional(),
 }, async ({ campaign_id, name, description, test_dimension, hypothesis, variants, assignment_method, primary_metric, secondary_metrics, min_sample_per_variant }) => {
+    if (!campaign_id) {
+        return { content: [{ type: "text", text: "campaign_id is required. Each campaign must have exactly 1 experiment." }] };
+    }
+    // Enforce 1 experiment per campaign
+    const { count: existing } = await supabase
+        .from("experiments")
+        .select("id", { count: "exact", head: true })
+        .eq("campaign_id", campaign_id);
+    if (existing && existing > 0) {
+        return { content: [{ type: "text", text: "This campaign already has an experiment. Only 1 experiment per campaign is allowed. Use list_experiments to find it." }] };
+    }
     const { data, error } = await supabase
         .from("experiments")
         .insert({

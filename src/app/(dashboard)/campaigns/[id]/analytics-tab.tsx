@@ -19,6 +19,7 @@ interface StepMetrics {
   bounced: number
   bounceRate: number
   failed: number
+  isHeader?: boolean
 }
 
 interface AnalyticsTabProps {
@@ -112,48 +113,70 @@ export function AnalyticsTab({ campaignId }: AnalyticsTabProps) {
       replyRate: sent > 0 ? Math.round((replied / sent) * 1000) / 10 : 0,
     })
 
-    // Calculate per-step metrics
+    // Calculate per-sequence, per-step metrics
     const metrics: StepMetrics[] = []
 
-    // Sequence totals
-    const seqSent = sent
-    const seqOpened = opened
-    const seqReplied = replied
+    // Overall totals row
     metrics.push({
-      label: "Sequence",
-      scheduled,
-      sent: seqSent,
-      opened: seqOpened,
-      openRate: seqSent > 0 ? Math.round((seqOpened / seqSent) * 1000) / 10 : 0,
-      replied: seqReplied,
-      replyRate: seqSent > 0 ? Math.round((seqReplied / seqSent) * 1000) / 10 : 0,
+      label: "All Sequences",
+      scheduled, sent, opened,
+      openRate: sent > 0 ? Math.round((opened / sent) * 1000) / 10 : 0,
+      replied,
+      replyRate: sent > 0 ? Math.round((replied / sent) * 1000) / 10 : 0,
       bounced,
-      bounceRate: seqSent > 0 ? Math.round((bounced / seqSent) * 1000) / 10 : 0,
+      bounceRate: sent > 0 ? Math.round((bounced / sent) * 1000) / 10 : 0,
       failed,
+      isHeader: true,
     })
 
-    // Per step
-    for (const step of steps) {
-      const stepEmails = emails.filter(e => e.sequence_step_id === step.id)
-      const sSent = stepEmails.filter(e => e.send_status === "sent").length
-      const sScheduled = stepEmails.filter(e => e.send_status === "scheduled").length
-      const sOpened = stepEmails.filter(e => e.send_status === "sent" && e.open_count > 0).length
-      const sReplied = stepEmails.filter(e => e.replied_at).length
-      const sBounced = stepEmails.filter(e => e.bounced_at).length
-      const sFailed = stepEmails.filter(e => e.send_status === "failed").length
+    // Group steps by sequence
+    for (const seq of sequences) {
+      const seqSteps = steps.filter(s => s.sequence_id === seq.id).sort((a, b) => a.step_number - b.step_number)
+      if (!seqSteps.length) continue
 
+      const seqStepIds = seqSteps.map(s => s.id)
+      const seqEmails = emails.filter(e => seqStepIds.includes(e.sequence_step_id))
+      const seqSent = seqEmails.filter(e => e.send_status === "sent").length
+      const seqScheduled = seqEmails.filter(e => e.send_status === "scheduled").length
+      const seqOpened = seqEmails.filter(e => e.send_status === "sent" && e.open_count > 0).length
+      const seqReplied = seqEmails.filter(e => e.replied_at).length
+      const seqBounced = seqEmails.filter(e => e.bounced_at).length
+      const seqFailed = seqEmails.filter(e => e.send_status === "failed").length
+
+      // Sequence header row
       metrics.push({
-        label: step.step_number === 1 ? "First email" : `Follow-up ${step.step_number - 1}`,
-        scheduled: sScheduled,
-        sent: sSent,
-        opened: sOpened,
-        openRate: sSent > 0 ? Math.round((sOpened / sSent) * 1000) / 10 : 0,
-        replied: sReplied,
-        replyRate: sSent > 0 ? Math.round((sReplied / sSent) * 1000) / 10 : 0,
-        bounced: sBounced,
-        bounceRate: sSent > 0 ? Math.round((sBounced / sSent) * 1000) / 10 : 0,
-        failed: sFailed,
+        label: seq.name,
+        scheduled: seqScheduled, sent: seqSent, opened: seqOpened,
+        openRate: seqSent > 0 ? Math.round((seqOpened / seqSent) * 1000) / 10 : 0,
+        replied: seqReplied,
+        replyRate: seqSent > 0 ? Math.round((seqReplied / seqSent) * 1000) / 10 : 0,
+        bounced: seqBounced,
+        bounceRate: seqSent > 0 ? Math.round((seqBounced / seqSent) * 1000) / 10 : 0,
+        failed: seqFailed,
+        isHeader: true,
       })
+
+      // Per step within this sequence
+      for (const step of seqSteps) {
+        const stepEmails = emails.filter(e => e.sequence_step_id === step.id)
+        const sSent = stepEmails.filter(e => e.send_status === "sent").length
+        const sScheduled = stepEmails.filter(e => e.send_status === "scheduled").length
+        const sOpened = stepEmails.filter(e => e.send_status === "sent" && e.open_count > 0).length
+        const sReplied = stepEmails.filter(e => e.replied_at).length
+        const sBounced = stepEmails.filter(e => e.bounced_at).length
+        const sFailed = stepEmails.filter(e => e.send_status === "failed").length
+
+        metrics.push({
+          label: step.step_number === 1 ? "  First email" : `  Follow-up ${step.step_number - 1}`,
+          scheduled: sScheduled, sent: sSent, opened: sOpened,
+          openRate: sSent > 0 ? Math.round((sOpened / sSent) * 1000) / 10 : 0,
+          replied: sReplied,
+          replyRate: sSent > 0 ? Math.round((sReplied / sSent) * 1000) / 10 : 0,
+          bounced: sBounced,
+          bounceRate: sSent > 0 ? Math.round((sBounced / sSent) * 1000) / 10 : 0,
+          failed: sFailed,
+        })
+      }
     }
 
     setStepMetrics(metrics)
@@ -226,8 +249,8 @@ export function AnalyticsTab({ campaignId }: AnalyticsTabProps) {
             </TableHeader>
             <TableBody>
               {stepMetrics.map((m, i) => (
-                <TableRow key={i} className={i === 0 ? "font-medium bg-gray-50/50" : ""}>
-                  <TableCell className="text-sm">{m.label}</TableCell>
+                <TableRow key={i} className={m.isHeader ? "font-medium bg-gray-50/50" : ""}>
+                  <TableCell className={`text-sm ${m.isHeader ? "font-semibold" : "text-gray-600"}`}>{m.label}</TableCell>
                   <TableCell className="text-center text-sm text-gray-500">{m.scheduled}</TableCell>
                   <TableCell className="text-center text-sm text-blue-600">{m.sent}</TableCell>
                   <TableCell className="text-center text-sm text-green-600">

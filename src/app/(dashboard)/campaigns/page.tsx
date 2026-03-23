@@ -83,6 +83,19 @@ export default function CampaignsPage() {
 
   const handleArchive = async (id: string) => {
     const supabase = createClient()
+
+    // Check for active sequences
+    const { count } = await supabase
+      .from("sequences")
+      .select("id", { count: "exact", head: true })
+      .eq("campaign_id", id)
+      .eq("status", "active")
+
+    if (count && count > 0) {
+      toast.error("Cannot delete: campaign has active sequences. Pause them first.")
+      return
+    }
+
     const { error } = await supabase
       .from("campaigns")
       .update({ status: "archived" })
