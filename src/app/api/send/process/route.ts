@@ -107,9 +107,11 @@ export async function POST() {
 
   const activeStepIds = activeSteps.map(s => s.id)
 
-  const { data: emails, error } = await supabase
+  // STEP 1: Atomically claim emails by setting send_status = 'sending'
+  // This prevents concurrent cron runs from picking up the same emails
+  const { data: claimable } = await supabase
     .from('emails')
-    .select('*, contacts(email, first_name, last_name, status), prospects(company_name)')
+    .select('id')
     .in('approval_status', ['approved', 'edited'])
     .eq('send_status', 'scheduled')
     .in('sequence_step_id', activeStepIds)
@@ -117,8 +119,26 @@ export async function POST() {
     .order('scheduled_for', { ascending: true })
     .limit(GMAIL_LIMITS.maxPerHour)
 
+  if (!claimable?.length) return NextResponse.json({ message: 'No emails ready to send', sent: 0 })
+
+  const claimIds = claimable.map(e => e.id)
+
+  // Atomically mark as 'sending' — second cron run will find nothing
+  await supabase
+    .from('emails')
+    .update({ send_status: 'sending' })
+    .in('id', claimIds)
+    .eq('send_status', 'scheduled') // extra safety: only claim if still scheduled
+
+  // Now fetch the full data for claimed emails
+  const { data: emails, error } = await supabase
+    .from('emails')
+    .select('*, contacts(email, first_name, last_name, status), prospects(company_name)')
+    .in('id', claimIds)
+    .eq('send_status', 'sending')
+
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!emails?.length) return NextResponse.json({ message: 'No emails ready to send', sent: 0 })
+  if (!emails?.length) return NextResponse.json({ message: 'No emails to process', sent: 0 })
 
   // Build a map of step info for ordering checks
   const stepInfoMap = Object.fromEntries(
@@ -160,7 +180,8 @@ export async function POST() {
           .single()
 
         if (prevEmail && prevEmail.send_status !== 'sent' && prevEmail.send_status !== 'skipped') {
-          // Previous step not yet sent — skip for now
+          // Previous step not yet sent — revert to scheduled for next run
+          await supabase.from('emails').update({ send_status: 'scheduled' }).eq('id', email.id)
           results.push({ id: email.id, status: 'waiting', error: 'Previous step not yet sent' })
           continue
         }
@@ -173,8 +194,6 @@ export async function POST() {
     }
 
     try {
-      // Mark as sending
-      await supabase.from('emails').update({ send_status: 'sending' }).eq('id', email.id)
 
       // Check if this is a follow-up that should thread with step 1
       let threadId: string | undefined
@@ -231,6 +250,8 @@ ${email.body.replace(/\n/g, '<br/>')}
       const senderKey = fromAlias || '_default'
       const accountSentToday = (perAccountSentToday[senderKey] || 0) + (senderSentCount[senderKey] || 0)
       if (accountSentToday >= dailyLimit) {
+        // Revert to scheduled — will be picked up tomorrow
+        await supabase.from('emails').update({ send_status: 'scheduled' }).eq('id', email.id)
         results.push({ id: email.id, status: 'skipped_limit', error: `Account ${senderKey} hit daily limit (${dailyLimit})` })
         continue
       }
