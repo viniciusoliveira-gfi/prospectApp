@@ -206,26 +206,26 @@ export function AnalyticsTab({ campaignId }: AnalyticsTabProps) {
         <CardContent className="py-8">
           <div className="flex items-center justify-center gap-12 flex-wrap">
             <DonutChart
-              value={totals.sent}
-              label="Sent"
+              value={totals.sent + totals.scheduled > 0 ? Math.round((totals.sent / (totals.sent + totals.scheduled)) * 1000) / 10 : 0}
+              label={`Sent (${totals.sent}/${totals.sent + totals.scheduled})`}
               color="#3b82f6"
-              isPercent={false}
+              isPercent={true}
             />
             <DonutChart
               value={totals.openRate}
-              label="Opened"
+              label={`Opened (${totals.opened}/${totals.sent})`}
               color="#22c55e"
               isPercent={true}
             />
             <DonutChart
               value={totals.replyRate}
-              label="Replied"
+              label={`Replied (${totals.replied}/${totals.sent})`}
               color="#a855f7"
               isPercent={true}
             />
             <DonutChart
               value={totals.bounced > 0 ? Math.round((totals.bounced / totals.sent) * 1000) / 10 : 0}
-              label="Bounced"
+              label={`Bounced (${totals.bounced}/${totals.sent})`}
               color="#ef4444"
               isPercent={true}
             />
