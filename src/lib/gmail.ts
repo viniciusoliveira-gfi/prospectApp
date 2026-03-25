@@ -3,7 +3,7 @@ import { createAdminClient } from '@/lib/supabase/admin'
 
 export function getOAuthClient() {
   const redirectUri = process.env.GOOGLE_REDIRECT_URI
-    || `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/auth/google/callback`
+    || `${(process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').trim()}/api/auth/google/callback`
 
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
@@ -157,7 +157,7 @@ export async function sendEmail({
 }) {
   const { gmail, email: senderEmail } = await getGmailClient(fromAlias)
   const sendFrom = fromAlias || senderEmail
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000').trim()
 
   // Inject tracking pixel (if tracking enabled)
   const trackedBody = trackingPixelId
