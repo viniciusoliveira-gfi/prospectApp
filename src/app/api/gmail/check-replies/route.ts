@@ -8,11 +8,12 @@ export async function POST() {
   // Get all sent emails that haven't been marked as replied or bounced
   const { data: sentEmails, error } = await supabase
     .from('emails')
-    .select('id, gmail_thread_id, gmail_message_id, contact_id, prospect_id, experiment_id')
+    .select('id, gmail_thread_id, gmail_message_id, contact_id, prospect_id, experiment_id, sent_from')
     .eq('send_status', 'sent')
     .is('replied_at', null)
     .is('bounced_at', null)
     .not('gmail_thread_id', 'is', null)
+    .limit(500)
 
   if (error || !sentEmails?.length) {
     return NextResponse.json({ checked: 0, replies_found: 0, bounces_found: 0 })
@@ -23,11 +24,27 @@ export async function POST() {
 
   const BOUNCE_SENDERS = ['mailer-daemon', 'postmaster', 'mail-noreply@google.com']
 
-  try {
-    const { gmail, email: senderEmail } = await getGmailClient()
+  // Group emails by sender account so we use the right Gmail client
+  const emailsBySender = new Map<string, typeof sentEmails>()
+  for (const email of sentEmails) {
+    const sender = email.sent_from || '_default'
+    if (!emailsBySender.has(sender)) emailsBySender.set(sender, [])
+    emailsBySender.get(sender)!.push(email)
+  }
 
-    // Group by thread to avoid duplicate API calls
-    const threadIds = Array.from(new Set(sentEmails.map(e => e.gmail_thread_id!)))
+  try {
+    for (const [sender, senderEmails] of Array.from(emailsBySender)) {
+    // Get the right Gmail client for this sender account
+    let gmail, senderEmail: string
+    try {
+      const client = await getGmailClient(sender !== '_default' ? sender : undefined)
+      gmail = client.gmail
+      senderEmail = client.email
+    } catch {
+      continue // skip if account can't be reached
+    }
+
+    const threadIds = Array.from(new Set(senderEmails.map(e => e.gmail_thread_id!)))
 
     for (const threadId of threadIds) {
       try {
@@ -54,7 +71,7 @@ export async function POST() {
 
         if (bounceMessage) {
           const snippet = bounceMessage.snippet || ''
-          const threadEmails = sentEmails.filter(e => e.gmail_thread_id === threadId)
+          const threadEmails = senderEmails.filter(e => e.gmail_thread_id === threadId)
 
           for (const email of threadEmails) {
             await supabase
@@ -131,7 +148,7 @@ export async function POST() {
         const snippet = latestReply.snippet || ''
 
         // Mark all emails in this thread as replied
-        const threadEmails = sentEmails.filter(e => e.gmail_thread_id === threadId)
+        const threadEmails = senderEmails.filter(e => e.gmail_thread_id === threadId)
         for (const email of threadEmails) {
           await supabase
             .from('emails')
@@ -205,6 +222,7 @@ export async function POST() {
         continue
       }
     }
+    } // end sender loop
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to check replies' },

@@ -6,6 +6,23 @@ import { syncCampaignStatus } from '@/lib/campaign-status'
 export async function POST() {
   const supabase = createAdminClient()
 
+  // Recovery: reset emails stuck in 'sending' for more than 10 minutes
+  const stuckThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString()
+  const { data: stuckEmails } = await supabase
+    .from('emails')
+    .select('id')
+    .eq('send_status', 'sending')
+    .lt('scheduled_for', stuckThreshold)
+
+  if (stuckEmails?.length) {
+    await supabase
+      .from('emails')
+      .update({ send_status: 'scheduled' })
+      .in('id', stuckEmails.map(e => e.id))
+
+    console.log(`Recovered ${stuckEmails.length} stuck emails`)
+  }
+
   // Load sending settings
   const { data: sendingSettings } = await supabase
     .from('settings')
