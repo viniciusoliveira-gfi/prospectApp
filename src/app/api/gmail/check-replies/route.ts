@@ -223,6 +223,129 @@ export async function POST() {
       }
     }
     } // end sender loop
+
+    // BOUNCE SEARCH: Search Gmail inbox for delivery failure notifications
+    // These come as separate threads, not in the original sent thread
+    for (const [sender, senderEmails] of Array.from(emailsBySender)) {
+      try {
+        const client = await getGmailClient(sender !== '_default' ? sender : undefined)
+        const gmailClient = client.gmail
+
+        // Search for bounce-related messages in the last 7 days
+        const { data: searchResult } = await gmailClient.users.messages.list({
+          userId: 'me',
+          q: 'from:(mailer-daemon OR postmaster) newer_than:7d',
+          maxResults: 50,
+        })
+
+        if (!searchResult.messages?.length) continue
+
+        for (const msg of searchResult.messages) {
+          try {
+            const { data: message } = await gmailClient.users.messages.get({
+              userId: 'me',
+              id: msg.id!,
+              format: 'full',
+            })
+
+            const snippet = message.snippet || ''
+            const body = message.payload?.parts?.[0]?.body?.data
+              ? Buffer.from(message.payload.parts[0].body.data, 'base64url').toString()
+              : snippet
+
+            // Extract the bounced recipient email from the message
+            const toHeader = message.payload?.headers?.find(h => h.name === 'X-Failed-Recipients')?.value
+            const bodyMatch = body.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)
+            const bouncedEmail = toHeader || bodyMatch?.[1]
+
+            if (!bouncedEmail) continue
+
+            // Look up the contact by email address
+            const { data: bouncedContact } = await supabase
+              .from('contacts')
+              .select('id')
+              .eq('email', bouncedEmail.toLowerCase())
+              .single()
+
+            if (!bouncedContact) continue
+
+            // Find the sent email for this contact
+            const emailRecord = senderEmails.find(e => e.contact_id === bouncedContact.id)
+            if (!emailRecord) continue
+
+            // Check if already marked as bounced
+            const { data: existing } = await supabase
+              .from('emails')
+              .select('bounced_at')
+              .eq('id', emailRecord.id)
+              .single()
+
+            if (existing?.bounced_at) continue
+
+            // Mark as bounced
+            await supabase
+              .from('emails')
+              .update({
+                bounced_at: new Date().toISOString(),
+                error_message: `Bounce: ${snippet.substring(0, 300)}`,
+              })
+              .eq('id', emailRecord.id)
+
+            // Update contact status
+            await supabase
+              .from('contacts')
+              .update({ status: 'bounced' })
+              .eq('id', bouncedContact.id)
+
+            // Skip remaining unsent emails for this contact
+            const { data: stepData } = await supabase
+              .from('emails')
+              .select('sequence_step_id')
+              .eq('id', emailRecord.id)
+              .single()
+
+            if (stepData) {
+              const { data: step } = await supabase
+                .from('sequence_steps')
+                .select('sequence_id')
+                .eq('id', stepData.sequence_step_id)
+                .single()
+
+              if (step) {
+                const { data: allSteps } = await supabase
+                  .from('sequence_steps')
+                  .select('id')
+                  .eq('sequence_id', step.sequence_id)
+
+                if (allSteps?.length) {
+                  await supabase
+                    .from('emails')
+                    .update({ send_status: 'skipped', error_message: 'Skipped — contact bounced' })
+                    .eq('contact_id', bouncedContact.id)
+                    .in('sequence_step_id', allSteps.map(s => s.id))
+                    .in('send_status', ['queued', 'scheduled'])
+                }
+              }
+            }
+
+            // Log activity
+            await supabase.from('activity_log').insert({
+              email_id: emailRecord.id,
+              contact_id: emailRecord.contact_id,
+              prospect_id: emailRecord.prospect_id,
+              action: 'email_bounced',
+              details: { recipient: bouncedEmail, snippet: snippet.substring(0, 200) },
+            })
+
+            bouncesFound++
+          } catch {
+            continue
+          }
+        }
+      } catch {
+        continue
+      }
+    }
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Failed to check replies' },
