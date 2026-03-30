@@ -28,7 +28,7 @@ const statusColors: Record<string, "default" | "secondary" | "destructive" | "ou
 export default function CampaignDetailPage() {
   const params = useParams()
   const router = useRouter()
-  const campaignId = params.id as string
+  const campaignId = params?.id as string
   const [campaign, setCampaign] = useState<Campaign | null>(null)
   const [loading, setLoading] = useState(true)
 
