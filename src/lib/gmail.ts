@@ -114,10 +114,17 @@ export function createMimeMessage({
   messageId?: string
 }): string {
   const boundary = 'boundary_' + Date.now().toString(36)
+
+  // Encode subject with RFC 2047 if it contains non-ASCII characters
+  const hasNonAscii = /[^\x00-\x7F]/.test(subject)
+  const encodedSubject = hasNonAscii
+    ? `=?UTF-8?B?${Buffer.from(subject, 'utf-8').toString('base64')}?=`
+    : subject
+
   const lines = [
     `From: ${from}`,
     `To: ${to}`,
-    `Subject: ${subject}`,
+    `Subject: ${encodedSubject}`,
     `MIME-Version: 1.0`,
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
   ]
