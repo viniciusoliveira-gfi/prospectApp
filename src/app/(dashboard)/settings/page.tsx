@@ -74,11 +74,11 @@ function SettingsContent() {
   const [loadingAliases, setLoadingAliases] = useState(false)
 
   useEffect(() => {
-    if (searchParams.get("gmail") === "connected") {
+    if (searchParams?.get("gmail") === "connected") {
       toast.success("Gmail connected successfully")
     }
-    if (searchParams.get("error")) {
-      toast.error(`Error: ${searchParams.get("error")}`)
+    if (searchParams?.get("error")) {
+      toast.error(`Error: ${searchParams?.get("error")}`)
     }
     loadSettings()
   }, [searchParams])

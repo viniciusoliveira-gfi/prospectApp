@@ -76,7 +76,7 @@ interface ExperimentData {
 export default function ExperimentDetailPage() {
   const params = useParams()
   const router = useRouter()
-  const experimentId = params.id as string
+  const experimentId = params?.id as string
 
   const [experiment, setExperiment] = useState<ExperimentData | null>(null)
   const [metrics, setMetrics] = useState<Record<string, VariantMetrics>>({})

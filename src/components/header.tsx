@@ -27,7 +27,7 @@ function getPageTitle(pathname: string): string {
 export function Header() {
   const pathname = usePathname()
   const router = useRouter()
-  const title = getPageTitle(pathname)
+  const title = getPageTitle(pathname || '/')
 
   const handleSignOut = async () => {
     const supabase = createClient()

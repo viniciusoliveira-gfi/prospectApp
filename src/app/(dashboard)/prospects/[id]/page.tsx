@@ -25,7 +25,7 @@ interface ContactWithMeta extends Contact {
 export default function ProspectDetailPage() {
   const params = useParams()
   const router = useRouter()
-  const prospectId = params.id as string
+  const prospectId = params?.id as string
   const [prospect, setProspect] = useState<Prospect | null>(null)
   const [contacts, setContacts] = useState<ContactWithMeta[]>([])
   const [loading, setLoading] = useState(true)

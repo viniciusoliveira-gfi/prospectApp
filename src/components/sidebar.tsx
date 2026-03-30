@@ -65,7 +65,7 @@ export function Sidebar() {
           const isActive =
             item.href === "/"
               ? pathname === "/"
-              : pathname.startsWith(item.href)
+              : pathname?.startsWith(item.href)
           const Icon = item.icon
 
           const link = (
