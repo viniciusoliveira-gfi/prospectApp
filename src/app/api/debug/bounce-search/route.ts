@@ -14,6 +14,20 @@ export async function GET() {
   results.push(`GOOGLE_REDIRECT_URI: ${process.env.GOOGLE_REDIRECT_URI || 'not set (using default)'}`)
   results.push(`APP_URL: ${(process.env.NEXT_PUBLIC_APP_URL || 'not set').trim()}`)
 
+  // Direct DB check — what does the app ACTUALLY see?
+  results.push(`\nSUPABASE_URL: ${process.env.NEXT_PUBLIC_SUPABASE_URL?.substring(0, 30)}...`)
+
+  const { data: directCheck } = await supabase
+    .from('settings')
+    .select('key, value')
+    .like('key', 'gmail_tokens%')
+
+  results.push(`\nDirect DB read (${directCheck?.length || 0} rows):`)
+  for (const row of (directCheck || [])) {
+    const v = row.value as { email?: string; refresh_token?: string }
+    results.push(`  ${row.key}: email=${v.email}, token=${v.refresh_token?.substring(0, 15)}...`)
+  }
+
   // Get all Gmail accounts
   const { data: allTokens } = await supabase
     .from('settings')
