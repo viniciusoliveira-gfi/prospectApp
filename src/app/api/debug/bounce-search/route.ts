@@ -25,6 +25,9 @@ export async function GET() {
     if (!tokens.email) continue
 
     results.push(`\nChecking account: ${tokens.email}`)
+    results.push(`  Token key: ${row.key}`)
+    results.push(`  Has refresh_token: ${!!(tokens as { refresh_token?: string }).refresh_token}`)
+    results.push(`  Refresh token starts with: ${((tokens as { refresh_token?: string }).refresh_token || '').substring(0, 10)}...`)
 
     try {
       const { gmail } = await getGmailClient(tokens.email)
@@ -58,7 +61,10 @@ export async function GET() {
         }
       }
     } catch (err) {
-      results.push(`  Error: ${err instanceof Error ? err.message : 'unknown'}`)
+      const errObj = err as { response?: { data?: unknown }; message?: string; code?: string }
+      results.push(`  Error: ${errObj.message || 'unknown'}`)
+      if (errObj.response?.data) results.push(`  Details: ${JSON.stringify(errObj.response.data)}`)
+      if (errObj.code) results.push(`  Code: ${errObj.code}`)
     }
   }
 
