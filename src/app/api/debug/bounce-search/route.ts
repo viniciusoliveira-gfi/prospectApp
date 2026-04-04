@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getGmailClient } from '@/lib/gmail'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET() {
   const supabase = createAdminClient()
   const results: string[] = []
