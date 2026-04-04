@@ -8,6 +8,12 @@ export async function GET() {
   const supabase = createAdminClient()
   const results: string[] = []
 
+  // Check env vars
+  results.push(`GOOGLE_CLIENT_ID: ${process.env.GOOGLE_CLIENT_ID ? 'set (' + process.env.GOOGLE_CLIENT_ID?.substring(0, 20) + '...)' : 'NOT SET'}`)
+  results.push(`GOOGLE_CLIENT_SECRET: ${process.env.GOOGLE_CLIENT_SECRET ? 'set' : 'NOT SET'}`)
+  results.push(`GOOGLE_REDIRECT_URI: ${process.env.GOOGLE_REDIRECT_URI || 'not set (using default)'}`)
+  results.push(`APP_URL: ${(process.env.NEXT_PUBLIC_APP_URL || 'not set').trim()}`)
+
   // Get all Gmail accounts
   const { data: allTokens } = await supabase
     .from('settings')
