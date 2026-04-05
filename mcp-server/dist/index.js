@@ -1607,7 +1607,7 @@ server.tool("recalculate_campaign_schedule", "Recalculate schedules for ALL sequ
         const stepIds = steps.map(s => s.id);
         const { data: emails } = await supabase
             .from("emails")
-            .select("id, sequence_step_id, contact_id")
+            .select("id, sequence_step_id, contact_id, scheduled_for")
             .in("sequence_step_id", stepIds)
             .in("send_status", ["queued", "scheduled"]);
         for (const email of (emails || [])) {
@@ -1627,8 +1627,11 @@ server.tool("recalculate_campaign_schedule", "Recalculate schedules for ALL sequ
     if (!allEmails.length)
         return { content: [{ type: "text", text: "No unsent emails to schedule." }] };
     // 4. Helper functions
-    const baseDate = new Date();
-    const tzBase = new Date(baseDate.toLocaleString("en-US", { timeZone: timezone }));
+    // Use tomorrow as base for step 1 (today's sends are already handled by the send processor)
+    const now = new Date();
+    const tzNow = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
+    const tzBase = new Date(tzNow);
+    tzBase.setDate(tzBase.getDate() + 1); // start from tomorrow
     function nextSendDay(from, addDays) {
         const target = new Date(from);
         target.setDate(target.getDate() + addDays);
