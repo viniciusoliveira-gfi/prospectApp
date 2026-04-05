@@ -2059,8 +2059,15 @@ server.tool(
     // Use tomorrow as base for step 1 (today's sends are already handled by the send processor)
     const now = new Date();
     const tzNow = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
-    const tzBase = new Date(tzNow);
-    tzBase.setDate(tzBase.getDate() + 1); // start from tomorrow
+    const tzTomorrow = new Date(tzNow);
+    tzTomorrow.setDate(tzTomorrow.getDate() + 1);
+    tzTomorrow.setHours(hoursStart, 0, 0, 0);
+    const tzBase = new Date(tzTomorrow);
+
+    // Clamp any date to tomorrow if it's in the past
+    function clampToFuture(d: Date): Date {
+      return d < tzTomorrow ? new Date(tzTomorrow) : d;
+    }
 
     function nextSendDay(from: Date, addDays: number): Date {
       const target = new Date(from);
@@ -2141,7 +2148,7 @@ server.tool(
     let totalRescheduled = 0;
 
     // 6. Schedule all Step 1 emails, filling days up to capacity
-    const step1Start = nextSendDay(tzBase, 0);
+    const step1Start = clampToFuture(nextSendDay(tzBase, 0));
     for (const email of step1Emails) {
       const sendDate = getAvailableDay(step1Start);
       assignToDay(sendDate);
@@ -2160,7 +2167,7 @@ server.tool(
     // Get all unique step configs across sequences for delay gap calculation
     const stepConfigs: { step_number: number; delay_days: number }[] = [];
     for (const seq of sequences) {
-      const steps = ((seq.sequence_steps || []) as { step_number: number; delay_days: number }[]);
+      const steps = ((seq.sequence_steps || []) as { id: string; step_number: number; delay_days: number }[]);
       for (const s of steps) {
         if (!stepConfigs.find(sc => sc.step_number === s.step_number)) {
           stepConfigs.push(s);
@@ -2169,9 +2176,57 @@ server.tool(
     }
     stepConfigs.sort((a, b) => a.step_number - b.step_number);
 
+    // For contacts whose step 1 was already sent, look up their sent dates
+    for (const [contactId] of Array.from(laterEmails)) {
+      if (contactStepDates.has(contactId)) continue; // already scheduled step 1 above
+
+      // Find sent emails for this contact to get their step dates
+      const allStepIds: string[] = [];
+      for (const seq of sequences) {
+        const steps = ((seq.sequence_steps || []) as { id: string }[]);
+        allStepIds.push(...steps.map(s => s.id));
+      }
+
+      const { data: sentForContact } = await supabase
+        .from("emails")
+        .select("sequence_step_id, sent_at, scheduled_for")
+        .eq("contact_id", contactId)
+        .eq("send_status", "sent")
+        .in("sequence_step_id", allStepIds);
+
+      if (sentForContact?.length) {
+        const stepMap = new Map<number, Date>();
+        for (const sent of sentForContact) {
+          // Find step number for this step ID
+          for (const seq of sequences) {
+            const steps = ((seq.sequence_steps || []) as { id: string; step_number: number }[]);
+            const step = steps.find(s => s.id === sent.sequence_step_id);
+            if (step) {
+              const date = sent.sent_at ? new Date(sent.sent_at) : sent.scheduled_for ? new Date(sent.scheduled_for) : null;
+              if (date) stepMap.set(step.step_number, date);
+            }
+          }
+        }
+        if (stepMap.size) contactStepDates.set(contactId, stepMap);
+      }
+    }
+
     for (const [contactId, contactLaterEmails] of Array.from(laterEmails)) {
       const stepDates = contactStepDates.get(contactId);
-      if (!stepDates) continue; // no step 1 — skip
+      if (!stepDates) {
+        // No step history at all — schedule from base date
+        let fallbackDate = getAvailableDay(tzBase);
+        for (const email of contactLaterEmails) {
+          assignToDay(fallbackDate);
+          campaignToSchedule.push({
+            id: email.id,
+            updates: { scheduled_for: fallbackDate.toISOString(), send_status: "scheduled" },
+          });
+          totalRescheduled++;
+          fallbackDate = getAvailableDay(new Date(fallbackDate.getTime() + 86400000));
+        }
+        continue;
+      }
 
       for (const email of contactLaterEmails) {
         // Find the previous step's date for this contact
@@ -2183,8 +2238,8 @@ server.tool(
         const prevStepConfig = stepConfigs.find(s => s.step_number === email.step_number - 1);
         const gap = (thisStepConfig?.delay_days || 0) - (prevStepConfig?.delay_days || 0);
 
-        // Earliest date = previous step date + gap days
-        const earliestDate = nextSendDay(prevStepDate, gap);
+        // Earliest date = previous step date + gap days, clamped to future
+        const earliestDate = clampToFuture(nextSendDay(prevStepDate, gap));
         const sendDate = getAvailableDay(earliestDate);
         assignToDay(sendDate);
 
