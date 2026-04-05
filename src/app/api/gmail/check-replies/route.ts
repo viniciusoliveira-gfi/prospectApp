@@ -151,17 +151,17 @@ export async function POST() {
 
             if (!bouncedEmail) continue
 
-            // Look up contact (use limit(1) — duplicates may exist)
+            // Look up ALL contacts with this email (duplicates may exist)
             const { data: bouncedContacts } = await supabase
               .from('contacts')
               .select('id')
               .eq('email', bouncedEmail.toLowerCase())
-              .limit(1)
 
             if (!bouncedContacts?.length) continue
 
-            // Find sent email for this contact (search ALL sent emails)
-            const emailRecord = sentEmails.find(e => e.contact_id === bouncedContacts[0].id)
+            // Find sent email matching ANY of these contact IDs
+            const bouncedContactIds = bouncedContacts.map(c => c.id)
+            const emailRecord = sentEmails.find(e => bouncedContactIds.includes(e.contact_id))
             if (!emailRecord) continue
 
             // Check if already bounced
