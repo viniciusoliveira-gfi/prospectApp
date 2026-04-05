@@ -46,6 +46,32 @@ export async function POST() {
         continue
       }
 
+      // Get ALL sender identities (primary + aliases) so we don't count our own follow-ups as replies
+      const ourAddresses: string[] = [senderEmail.toLowerCase()]
+      // Add the sender alias itself
+      if (sender !== '_default' && sender !== senderEmail) {
+        ourAddresses.push(sender.toLowerCase())
+      }
+      // Get stored aliases from settings
+      const { data: accountSettings } = await supabase
+        .from('settings')
+        .select('value')
+        .like('key', 'gmail_tokens%')
+
+      for (const row of (accountSettings || [])) {
+        const val = row.value as { email?: string; aliases?: string[] }
+        if (val.email?.toLowerCase() === senderEmail.toLowerCase()) {
+          if (val.aliases) {
+            for (const alias of val.aliases) {
+              if (!ourAddresses.includes(alias.toLowerCase())) {
+                ourAddresses.push(alias.toLowerCase())
+              }
+            }
+          }
+          break
+        }
+      }
+
       const threadIds = Array.from(new Set(senderEmails.map(e => e.gmail_thread_id!)))
 
       for (const threadId of threadIds) {
@@ -81,12 +107,14 @@ export async function POST() {
             continue
           }
 
-          // Check for replies
+          // Check for replies — message must NOT be from any of our addresses
           const hasReply = messages.some((msg: { payload?: { headers?: { name?: string; value?: string }[] } }) => {
             const fromHeader = msg.payload?.headers?.find((h: { name?: string }) => h.name === 'From')?.value || ''
             const fromLower = fromHeader.toLowerCase()
-            return !fromLower.includes(senderEmail.toLowerCase()) &&
-              !BOUNCE_SENDERS.some(bs => fromLower.includes(bs))
+            // Check if this message is from ANY of our addresses (primary + aliases)
+            const isFromUs = ourAddresses.some(addr => fromLower.includes(addr))
+            const isBounce = BOUNCE_SENDERS.some(bs => fromLower.includes(bs))
+            return !isFromUs && !isBounce
           })
 
           if (!hasReply) continue
