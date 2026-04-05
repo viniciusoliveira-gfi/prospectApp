@@ -2160,7 +2160,7 @@ server.tool(
     // Get all unique step configs across sequences for delay gap calculation
     const stepConfigs: { step_number: number; delay_days: number }[] = [];
     for (const seq of sequences) {
-      const steps = ((seq.sequence_steps || []) as { step_number: number; delay_days: number }[]);
+      const steps = ((seq.sequence_steps || []) as { id: string; step_number: number; delay_days: number }[]);
       for (const s of steps) {
         if (!stepConfigs.find(sc => sc.step_number === s.step_number)) {
           stepConfigs.push(s);
@@ -2169,9 +2169,57 @@ server.tool(
     }
     stepConfigs.sort((a, b) => a.step_number - b.step_number);
 
+    // For contacts whose step 1 was already sent, look up their sent dates
+    for (const [contactId] of Array.from(laterEmails)) {
+      if (contactStepDates.has(contactId)) continue; // already scheduled step 1 above
+
+      // Find sent emails for this contact to get their step dates
+      const allStepIds: string[] = [];
+      for (const seq of sequences) {
+        const steps = ((seq.sequence_steps || []) as { id: string }[]);
+        allStepIds.push(...steps.map(s => s.id));
+      }
+
+      const { data: sentForContact } = await supabase
+        .from("emails")
+        .select("sequence_step_id, sent_at, scheduled_for")
+        .eq("contact_id", contactId)
+        .eq("send_status", "sent")
+        .in("sequence_step_id", allStepIds);
+
+      if (sentForContact?.length) {
+        const stepMap = new Map<number, Date>();
+        for (const sent of sentForContact) {
+          // Find step number for this step ID
+          for (const seq of sequences) {
+            const steps = ((seq.sequence_steps || []) as { id: string; step_number: number }[]);
+            const step = steps.find(s => s.id === sent.sequence_step_id);
+            if (step) {
+              const date = sent.sent_at ? new Date(sent.sent_at) : sent.scheduled_for ? new Date(sent.scheduled_for) : null;
+              if (date) stepMap.set(step.step_number, date);
+            }
+          }
+        }
+        if (stepMap.size) contactStepDates.set(contactId, stepMap);
+      }
+    }
+
     for (const [contactId, contactLaterEmails] of Array.from(laterEmails)) {
       const stepDates = contactStepDates.get(contactId);
-      if (!stepDates) continue; // no step 1 — skip
+      if (!stepDates) {
+        // No step history at all — schedule from base date
+        let fallbackDate = getAvailableDay(tzBase);
+        for (const email of contactLaterEmails) {
+          assignToDay(fallbackDate);
+          campaignToSchedule.push({
+            id: email.id,
+            updates: { scheduled_for: fallbackDate.toISOString(), send_status: "scheduled" },
+          });
+          totalRescheduled++;
+          fallbackDate = getAvailableDay(new Date(fallbackDate.getTime() + 86400000));
+        }
+        continue;
+      }
 
       for (const email of contactLaterEmails) {
         // Find the previous step's date for this contact
