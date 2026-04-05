@@ -2059,8 +2059,15 @@ server.tool(
     // Use tomorrow as base for step 1 (today's sends are already handled by the send processor)
     const now = new Date();
     const tzNow = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
-    const tzBase = new Date(tzNow);
-    tzBase.setDate(tzBase.getDate() + 1); // start from tomorrow
+    const tzTomorrow = new Date(tzNow);
+    tzTomorrow.setDate(tzTomorrow.getDate() + 1);
+    tzTomorrow.setHours(hoursStart, 0, 0, 0);
+    const tzBase = new Date(tzTomorrow);
+
+    // Clamp any date to tomorrow if it's in the past
+    function clampToFuture(d: Date): Date {
+      return d < tzTomorrow ? new Date(tzTomorrow) : d;
+    }
 
     function nextSendDay(from: Date, addDays: number): Date {
       const target = new Date(from);
@@ -2141,7 +2148,7 @@ server.tool(
     let totalRescheduled = 0;
 
     // 6. Schedule all Step 1 emails, filling days up to capacity
-    const step1Start = nextSendDay(tzBase, 0);
+    const step1Start = clampToFuture(nextSendDay(tzBase, 0));
     for (const email of step1Emails) {
       const sendDate = getAvailableDay(step1Start);
       assignToDay(sendDate);
@@ -2231,8 +2238,8 @@ server.tool(
         const prevStepConfig = stepConfigs.find(s => s.step_number === email.step_number - 1);
         const gap = (thisStepConfig?.delay_days || 0) - (prevStepConfig?.delay_days || 0);
 
-        // Earliest date = previous step date + gap days
-        const earliestDate = nextSendDay(prevStepDate, gap);
+        // Earliest date = previous step date + gap days, clamped to future
+        const earliestDate = clampToFuture(nextSendDay(prevStepDate, gap));
         const sendDate = getAvailableDay(earliestDate);
         assignToDay(sendDate);
 
