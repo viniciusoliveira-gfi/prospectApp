@@ -984,6 +984,7 @@ server.tool(
     subject: z.string().optional(),
     body: z.string().optional(),
     approval_status: z.enum(["pending", "approved", "rejected", "edited"]).optional(),
+    send_status: z.enum(["queued", "scheduled", "sent", "failed", "skipped"]).optional().describe("Manually correct send status"),
     replied: z.boolean().optional().describe("true = mark as replied (sets replied_at to NOW), false = clear reply (resets replied_at, reply_snippet)"),
   },
   async ({ email_id, replied, ...updates }) => {
