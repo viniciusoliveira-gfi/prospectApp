@@ -1039,6 +1039,86 @@ server.tool(
 );
 
 server.tool(
+  "retry_failed_emails",
+  "Reset failed (and optionally skipped) emails back to scheduled so they can be retried. Call recalculate_campaign_schedule after to assign new send dates.",
+  {
+    campaign_id: z.string(),
+    include_skipped: z.boolean().optional().describe("Also retry skipped emails (default true)"),
+    email_ids: z.array(z.string()).optional().describe("Retry specific emails only"),
+  },
+  async ({ campaign_id, include_skipped = true, email_ids }) => {
+    // Get sequences + steps for this campaign
+    const { data: seqs } = await supabase.from("sequences").select("id").eq("campaign_id", campaign_id);
+    if (!seqs?.length) return { content: [{ type: "text", text: "No sequences in this campaign." }] };
+
+    const { data: steps } = await supabase.from("sequence_steps").select("id").in("sequence_id", seqs.map(s => s.id));
+    if (!steps?.length) return { content: [{ type: "text", text: "No steps found." }] };
+
+    const stepIds = steps.map(s => s.id);
+
+    // Build status filter
+    const statuses = ["failed"];
+    if (include_skipped) statuses.push("skipped");
+
+    // Get eligible emails
+    let query = supabase
+      .from("emails")
+      .select("id, contact_id, send_status")
+      .in("sequence_step_id", stepIds)
+      .in("send_status", statuses);
+
+    if (email_ids?.length) {
+      query = query.in("id", email_ids);
+    }
+
+    const { data: emails } = await query;
+    if (!emails?.length) return { content: [{ type: "text", text: "No failed/skipped emails found." }] };
+
+    // Get active contacts in this campaign to filter out orphans
+    const { data: activeContacts } = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("campaign_id", campaign_id);
+
+    const activeContactIds = new Set((activeContacts || []).map(c => c.id));
+
+    // Filter: only retry emails whose contact still exists
+    const retryable = emails.filter(e => activeContactIds.has(e.contact_id));
+    const orphaned = emails.length - retryable.length;
+
+    if (!retryable.length) {
+      return { content: [{ type: "text", text: `No retryable emails. ${orphaned} orphaned (contact deleted).` }] };
+    }
+
+    // Count by status before resetting
+    const failedCount = retryable.filter(e => e.send_status === "failed").length;
+    const skippedCount = retryable.filter(e => e.send_status === "skipped").length;
+
+    // Reset to scheduled, clear error metadata
+    const retryIds = retryable.map(e => e.id);
+    await supabase
+      .from("emails")
+      .update({
+        send_status: "scheduled",
+        error_message: null,
+        scheduled_for: null,
+      })
+      .in("id", retryIds);
+
+    return {
+      content: [{
+        type: "text",
+        text: `Reset ${retryable.length} emails to scheduled:\n` +
+          `  Failed: ${failedCount}\n` +
+          `  Skipped: ${skippedCount}\n` +
+          `  Orphaned (not retried): ${orphaned}\n\n` +
+          `Run recalculate_campaign_schedule to assign new send dates.`,
+      }],
+    };
+  }
+);
+
+server.tool(
   "delete_emails",
   "Permanently delete emails from the database. Only emails with send_status queued/scheduled/skipped can be deleted — sent emails are protected. Optionally pass campaign_id with no email_ids to delete all rejected emails in that campaign.",
   {
