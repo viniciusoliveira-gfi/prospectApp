@@ -978,22 +978,52 @@ server.tool(
 
 server.tool(
   "update_email",
-  "Edit an email's subject, body, or status",
+  "Edit an email's subject, body, status, or reply state. Set replied=false to clear false reply detection.",
   {
     email_id: z.string(),
     subject: z.string().optional(),
     body: z.string().optional(),
     approval_status: z.enum(["pending", "approved", "rejected", "edited"]).optional(),
+    replied: z.boolean().optional().describe("true = mark as replied (sets replied_at to NOW), false = clear reply (resets replied_at, reply_snippet)"),
   },
-  async ({ email_id, ...updates }) => {
+  async ({ email_id, replied, ...updates }) => {
     const clean: Record<string, unknown> = Object.fromEntries(
       Object.entries(updates).filter(([, v]) => v !== undefined)
     );
     if (clean.approval_status === "approved") clean.approved_at = new Date().toISOString();
 
+    // Handle replied flag
+    if (replied === false) {
+      clean.replied_at = null;
+      clean.reply_snippet = null;
+    } else if (replied === true) {
+      // Only set if not already replied
+      const { data: existing } = await supabase.from("emails").select("replied_at, contact_id").eq("id", email_id).single();
+      if (existing && !existing.replied_at) {
+        clean.replied_at = new Date().toISOString();
+      }
+    }
+
     const { error } = await supabase.from("emails").update(clean).eq("id", email_id);
     if (error) return { content: [{ type: "text", text: `Error: ${error.message}` }] };
-    return { content: [{ type: "text", text: "Email updated." }] };
+
+    // If clearing reply, also reset contact status if no other replied emails
+    if (replied === false) {
+      const { data: email } = await supabase.from("emails").select("contact_id").eq("id", email_id).single();
+      if (email) {
+        const { count } = await supabase
+          .from("emails")
+          .select("id", { count: "exact", head: true })
+          .eq("contact_id", email.contact_id)
+          .not("replied_at", "is", null);
+
+        if (count === 0) {
+          await supabase.from("contacts").update({ status: "active" }).eq("id", email.contact_id);
+        }
+      }
+    }
+
+    return { content: [{ type: "text", text: `Email updated.${replied === false ? " Reply cleared, contact status checked." : replied === true ? " Marked as replied." : ""}` }] };
   }
 );
 
