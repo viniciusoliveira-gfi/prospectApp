@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { checkSequenceReadiness } from '@/lib/scheduling'
 import { syncCampaignStatus } from '@/lib/campaign-status'
+import { resolveSendingConfig } from '@/lib/send-config'
+import { nextSendDay, getTimezoneNow } from '@/lib/schedule-helpers'
 
 export async function POST(
   _request: Request,
@@ -61,35 +63,9 @@ export async function POST(
     )
   }
 
-  // Get campaign send settings for sender assignment
-  const { data: campaign } = await supabase
-    .from('campaigns')
-    .select('send_settings, sending_account')
-    .eq('id', sequence.campaign_id)
-    .single()
-
-  const sendSettings = campaign?.send_settings as {
-    sender_accounts?: string[]
-  } | null
-
-  // Determine sender accounts
-  let senderAccounts = sendSettings?.sender_accounts || []
-  if (!senderAccounts.length && campaign?.sending_account) {
-    senderAccounts = [campaign.sending_account]
-  }
-  if (!senderAccounts.length) {
-    // Fall back to primary Gmail account
-    const { data: gmailData } = await supabase
-      .from('settings')
-      .select('value')
-      .eq('key', 'gmail_tokens')
-      .single()
-
-    if (gmailData?.value) {
-      const tokens = gmailData.value as { email?: string }
-      if (tokens.email) senderAccounts = [tokens.email]
-    }
-  }
+  // Resolve campaign + global sending config
+  const config = await resolveSendingConfig(sequence.campaign_id)
+  const senderAccounts = config.senderAccounts
 
   // Assign senders: same sender per prospect, distributed evenly
   const prospectSenderMap: Record<string, string> = {}
@@ -134,48 +110,10 @@ export async function POST(
   await syncCampaignStatus(sequence.campaign_id)
 
   // Smart schedule: distribute emails across days respecting daily limits
-  // Resolve campaign + global settings
-  const sendSettingsRaw = (campaign?.send_settings || {}) as {
-    send_days?: string[]
-    send_hours_start?: number
-    timezone?: string
-    daily_limit_per_account?: number
-  }
-
-  const { data: globalSettings } = await supabase
-    .from('settings')
-    .select('value')
-    .eq('key', 'sending_defaults')
-    .single()
-
-  const global = (globalSettings?.value || {}) as Record<string, string>
-
-  const sendDays = sendSettingsRaw.send_days?.length
-    ? sendSettingsRaw.send_days
-    : global.send_days ? JSON.parse(global.send_days) : ['1', '2', '3', '4', '5']
-
-  const hoursStart = sendSettingsRaw.send_hours_start ?? parseInt(global.hours_start || '9')
-  const timezone = sendSettingsRaw.timezone || global.timezone || 'America/Sao_Paulo'
-  const dailyLimitPerAccount = sendSettingsRaw.daily_limit_per_account
-    || parseInt(global.daily_limit_per_account || global.daily_limit || '25')
-
-  const dailyCapacity = senderAccounts.length * dailyLimitPerAccount
+  const dailyCapacity = config.dailyCapacity
 
   // Base date in timezone
-  const tzNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }))
-
-  // Helper: find next valid send day
-  function nextSendDay(from: Date, addDays: number): Date {
-    const target = new Date(from)
-    target.setDate(target.getDate() + addDays)
-    target.setHours(hoursStart, 0, 0, 0)
-    let safety = 0
-    while (!sendDays.includes(String(target.getDay())) && safety < 7) {
-      target.setDate(target.getDate() + 1)
-      safety++
-    }
-    return target
-  }
+  const tzNow = getTimezoneNow(config.timezone)
 
   // Group emails by step
   const emailsByStep: Record<string, typeof emails> = {}
@@ -189,12 +127,12 @@ export async function POST(
     const stepEmails = emailsByStep[step.id] || []
     if (!stepEmails.length) continue
 
-    let currentDate = nextSendDay(tzNow, step.delay_days)
+    let currentDate = nextSendDay(tzNow, step.delay_days, config.sendDays, config.hoursStart)
     let assignedToday = 0
 
     for (const email of stepEmails) {
       if (assignedToday >= dailyCapacity) {
-        currentDate = nextSendDay(currentDate, 1)
+        currentDate = nextSendDay(currentDate, 1, config.sendDays, config.hoursStart)
         assignedToday = 0
       }
 

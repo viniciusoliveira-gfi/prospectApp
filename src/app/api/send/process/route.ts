@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { sendEmail, GMAIL_LIMITS } from '@/lib/gmail'
 import { syncCampaignStatus } from '@/lib/campaign-status'
+import { resolveSendingConfig } from '@/lib/send-config'
+import { getTimezoneNow } from '@/lib/schedule-helpers'
 
 export async function POST(request: Request) {
   // Verify cron secret for direct calls
@@ -34,29 +36,17 @@ export async function POST(request: Request) {
     console.log(`Recovered ${stuckEmails.length} stuck emails`)
   }
 
-  // Load sending settings
-  const { data: sendingSettings } = await supabase
-    .from('settings')
-    .select('value')
-    .eq('key', 'sending_defaults')
-    .single()
+  // Load global sending config (campaign-specific config is loaded per-email later)
+  const globalConfig = await resolveSendingConfig()
 
-  const settings = (sendingSettings?.value || {}) as Record<string, string>
-  const accountTimezone = settings.timezone || 'America/Sao_Paulo'
-  const hoursStart = parseInt(settings.hours_start || '9')
-  const hoursEnd = parseInt(settings.hours_end || '18')
-  const globalDailyLimitPerAccount = parseInt(settings.daily_limit_per_account || settings.daily_limit || '25')
-  const sendDays: string[] = settings.send_days ? JSON.parse(settings.send_days) : ['1', '2', '3', '4', '5']
-
-  // Get current time in account timezone
   const now = new Date()
-  const tzTime = new Date(now.toLocaleString('en-US', { timeZone: accountTimezone }))
+  const tzTime = getTimezoneNow(globalConfig.timezone)
   const currentHour = tzTime.getHours()
   const currentDay = String(tzTime.getDay())
 
   // Check if today is a sending day
-  if (!sendDays.includes(currentDay)) {
-    return NextResponse.json({ message: `Not a sending day (${accountTimezone})`, sent: 0 })
+  if (!globalConfig.sendDays.includes(currentDay)) {
+    return NextResponse.json({ message: `Not a sending day (${globalConfig.timezone})`, sent: 0 })
   }
 
   // Calculate today's start in account timezone for per-account limit checks
@@ -78,8 +68,8 @@ export async function POST(request: Request) {
   }
 
   // Check sending hours in account timezone
-  if (currentHour < hoursStart || currentHour >= hoursEnd) {
-    return NextResponse.json({ message: `Outside sending hours (${currentHour}h in ${accountTimezone})`, sent: 0 })
+  if (currentHour < globalConfig.hoursStart || currentHour >= globalConfig.hoursEnd) {
+    return NextResponse.json({ message: `Outside sending hours (${currentHour}h in ${globalConfig.timezone})`, sent: 0 })
   }
 
   // Get approved, scheduled emails ready to send — only from active sequences
@@ -247,7 +237,7 @@ ${email.body.replace(/\n/g, '<br/>')}
       const emailCampaignId = stepInfo ? sequenceCampaignMap[stepInfo.sequence_id] : undefined
       const config = emailCampaignId ? campaignConfigs[emailCampaignId] : undefined
       const campaignLimit = (config as unknown as { daily_limit_per_account?: number })?.daily_limit_per_account
-      const dailyLimit = campaignLimit || globalDailyLimitPerAccount
+      const dailyLimit = campaignLimit || globalConfig.dailyLimitPerAccount
       let fromAlias: string | undefined = email.sent_from || undefined
 
       if (!fromAlias) {
