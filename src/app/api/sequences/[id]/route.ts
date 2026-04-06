@@ -42,6 +42,20 @@ export async function PATCH(
 
   // Update steps if provided
   if (body.steps) {
+    // Prevent step modification on active/completed sequences
+    const { data: seqForSteps } = await supabase
+      .from('sequences')
+      .select('status')
+      .eq('id', params.id)
+      .single()
+
+    if (seqForSteps?.status === 'active' || seqForSteps?.status === 'completed') {
+      return NextResponse.json(
+        { error: 'Cannot modify steps on active/completed sequences. Pause first.' },
+        { status: 400 }
+      )
+    }
+
     // Delete existing steps
     await supabase.from('sequence_steps').delete().eq('sequence_id', params.id)
 
@@ -73,6 +87,21 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   const supabase = createClient()
+
+  // Prevent deleting active sequences — must pause first
+  const { data: sequence } = await supabase
+    .from('sequences')
+    .select('status')
+    .eq('id', params.id)
+    .single()
+
+  if (sequence?.status === 'active') {
+    return NextResponse.json(
+      { error: 'Cannot delete active sequence. Pause it first.' },
+      { status: 400 }
+    )
+  }
+
   const { error } = await supabase.from('sequences').delete().eq('id', params.id)
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   return NextResponse.json({ success: true })
