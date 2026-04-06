@@ -3,7 +3,18 @@ import { createAdminClient } from '@/lib/supabase/admin'
 import { sendEmail, GMAIL_LIMITS } from '@/lib/gmail'
 import { syncCampaignStatus } from '@/lib/campaign-status'
 
-export async function POST() {
+export async function POST(request: Request) {
+  // Verify cron secret for direct calls
+  const cronSecret = process.env.CRON_SECRET
+  if (cronSecret) {
+    const authHeader = request.headers.get('x-cron-secret')
+    const url = new URL(request.url)
+    const urlSecret = url.searchParams.get('secret')
+    if (authHeader !== cronSecret && urlSecret !== cronSecret) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+  }
+
   const supabase = createAdminClient()
 
   // Recovery: reset emails stuck in 'sending' for more than 10 minutes

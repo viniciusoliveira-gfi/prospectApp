@@ -38,8 +38,7 @@ export async function updateSession(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/api/webhooks') &&
     !request.nextUrl.pathname.startsWith('/api/cron') &&
     !request.nextUrl.pathname.startsWith('/api/send/process') &&
-    !request.nextUrl.pathname.startsWith('/api/gmail/check-replies') &&
-    !request.nextUrl.pathname.startsWith('/api/sequences')
+    !request.nextUrl.pathname.startsWith('/api/gmail/check-replies')
   ) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
