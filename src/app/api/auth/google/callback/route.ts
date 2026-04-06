@@ -37,30 +37,22 @@ export async function GET(request: NextRequest) {
     // Use gmail_tokens for first account (backward compat), gmail_tokens_<email> for additional
     const { data: existing } = await supabase
       .from('settings')
-      .select('key')
+      .select('key, value')
       .like('key', 'gmail_tokens%')
 
-    const existingEmails = new Set<string>()
+    const existingEmails = new Map<string, string>() // email -> settings key
     for (const row of (existing || [])) {
-      // Check if this email already has an entry
-      const { data: rowData } = await supabase.from('settings').select('value').eq('key', row.key).single()
-      if (rowData?.value && (rowData.value as { email?: string }).email) {
-        existingEmails.add((rowData.value as { email: string }).email)
+      const val = row.value as { email?: string }
+      if (val.email) {
+        existingEmails.set(val.email, row.key)
       }
     }
 
     // Determine key: reuse existing key if same email, or create new one
     let settingsKey = 'gmail_tokens'
     if (existingEmails.has(email)) {
-      // Find the existing key for this email
-      for (const row of (existing || [])) {
-        const { data: rowData } = await supabase.from('settings').select('value').eq('key', row.key).single()
-        if (rowData?.value && (rowData.value as { email?: string }).email === email) {
-          settingsKey = row.key
-          break
-        }
-      }
-    } else if (existing?.length && !existingEmails.has(email)) {
+      settingsKey = existingEmails.get(email)!
+    } else if (existing?.length) {
       // New account — use email-based key
       settingsKey = `gmail_tokens_${email.replace(/[@.]/g, '_')}`
     }

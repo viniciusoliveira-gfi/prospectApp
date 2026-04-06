@@ -31,9 +31,6 @@ export async function GET() {
           .map(a => a.sendAsEmail!)
           .filter(Boolean)
 
-        // Log for debugging
-        console.log(`Aliases for ${tokens.email}:`, sendAsAddresses.map(a => `${a.sendAsEmail} (${a.verificationStatus}, primary: ${a.isPrimary})`))
-
         allAliases.push(...aliases)
 
         // Store aliases on this account's settings

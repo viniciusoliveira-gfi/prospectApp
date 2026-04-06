@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase/admin'
 import { getGmailClient } from '@/lib/gmail'
+import { gmail_v1 } from 'googleapis'
 
 export async function POST(request: Request) {
   // Verify cron secret for direct calls
@@ -46,8 +47,7 @@ export async function POST(request: Request) {
   try {
     // REPLY + IN-THREAD BOUNCE CHECK: check each sender's threads
     for (const [sender, senderEmails] of Array.from(emailsBySender)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let gmail: any
+      let gmail: gmail_v1.Gmail
       let senderEmail: string
       try {
         const client = await getGmailClient(sender !== '_default' ? sender : undefined)
@@ -98,9 +98,9 @@ export async function POST(request: Request) {
           if (messages.length <= 1) continue
 
           // Check for bounces in thread
-          const bounceMessage = messages.find((msg: { payload?: { headers?: { name?: string; value?: string }[] }; snippet?: string }) => {
-            const fromHeader = (msg.payload?.headers?.find((h: { name?: string }) => h.name === 'From')?.value || '').toLowerCase()
-            const subject = (msg.payload?.headers?.find((h: { name?: string }) => h.name === 'Subject')?.value || '').toLowerCase()
+          const bounceMessage = messages.find((msg) => {
+            const fromHeader = (msg.payload?.headers?.find((h) => h.name === 'From')?.value || '').toLowerCase()
+            const subject = (msg.payload?.headers?.find((h) => h.name === 'Subject')?.value || '').toLowerCase()
             return BOUNCE_SENDERS.some(bs => fromHeader.includes(bs)) ||
               subject.includes('delivery status notification') ||
               subject.includes('undeliverable') ||
@@ -119,8 +119,8 @@ export async function POST(request: Request) {
           }
 
           // Check for replies — message must NOT be from any of our addresses
-          const hasReply = messages.some((msg: { payload?: { headers?: { name?: string; value?: string }[] } }) => {
-            const fromHeader = msg.payload?.headers?.find((h: { name?: string }) => h.name === 'From')?.value || ''
+          const hasReply = messages.some((msg) => {
+            const fromHeader = msg.payload?.headers?.find((h) => h.name === 'From')?.value || ''
             const fromLower = fromHeader.toLowerCase()
             // Check if this message is from ANY of our addresses (primary + aliases)
             const isFromUs = ourAddresses.some(addr => fromLower.includes(addr))
@@ -147,8 +147,7 @@ export async function POST(request: Request) {
     // BOUNCE INBOX SEARCH: Search Gmail for mailer-daemon messages (separate threads)
     const checkedAccounts = new Set<string>()
     for (const [sender] of Array.from(emailsBySender)) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let gmailClient: any
+      let gmailClient: gmail_v1.Gmail
       let accountEmail: string
       try {
         const client = await getGmailClient(sender !== '_default' ? sender : undefined)
@@ -184,7 +183,7 @@ export async function POST(request: Request) {
               : snippet
 
             // Extract bounced recipient email
-            const toHeader = message.payload?.headers?.find((h: { name?: string }) => h.name === 'X-Failed-Recipients')?.value
+            const toHeader = message.payload?.headers?.find((h) => h.name === 'X-Failed-Recipients')?.value
             const bodyMatch = body.match(/([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/)
             const bouncedEmail = toHeader || bodyMatch?.[1]
 
