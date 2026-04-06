@@ -555,16 +555,34 @@ server.tool(
       };
     }
 
-    // Get campaign send settings for sender assignment
+    // Get campaign send settings
     const { data: campaign } = await supabase
       .from("campaigns")
-      .select("send_settings, sending_account")
+      .select("send_settings, sending_account, daily_send_limit")
       .eq("id", sequence.campaign_id)
       .single();
 
-    const ss = campaign?.send_settings as { sender_accounts?: string[] } | null;
-    let senderAccounts = ss?.sender_accounts || [];
-    if (!senderAccounts.length && campaign?.sending_account) senderAccounts = [campaign.sending_account];
+    const ss = (campaign?.send_settings || {}) as {
+      sender_accounts?: string[];
+      send_days?: string[];
+      send_hours_start?: number;
+      daily_limit_per_account?: number;
+      timezone?: string;
+    };
+
+    // Get global settings as fallback
+    const { data: globalSettings } = await supabase
+      .from("settings")
+      .select("value")
+      .eq("key", "sending_defaults")
+      .single();
+
+    const g = (globalSettings?.value || {}) as Record<string, string>;
+
+    let senderAccounts = ss.sender_accounts?.length
+      ? ss.sender_accounts
+      : campaign?.sending_account ? [campaign.sending_account] : [];
+
     if (!senderAccounts.length) {
       const { data: gmail } = await supabase.from("settings").select("value").eq("key", "gmail_tokens").single();
       if (gmail?.value) {
@@ -572,31 +590,24 @@ server.tool(
         if (t.email) senderAccounts = [t.email];
       }
     }
+    if (!senderAccounts.length) senderAccounts = ["_default"];
+
+    const dailyLimitPerAccount = ss.daily_limit_per_account
+      || parseInt(g.daily_limit_per_account || g.daily_limit || "25");
+
+    const sendDays = ss.send_days?.length
+      ? ss.send_days
+      : g.send_days ? JSON.parse(g.send_days) : ["1", "2", "3", "4", "5"];
+
+    const hoursStart = ss.send_hours_start ?? parseInt(g.hours_start || "9");
+    const timezone = ss.timezone || g.timezone || "America/Sao_Paulo";
+    const dailyCapacity = senderAccounts.length * dailyLimitPerAccount;
 
     // Assign senders: same per prospect, distributed evenly
     const prospectSenderMap: Record<string, string> = {};
     const senderCounts: Record<string, number> = {};
 
-    // Calculate schedules and assign senders
-    const now = new Date();
-    const stepDelayMap = Object.fromEntries(steps.map(s => [s.id, s.delay_days]));
-
     for (const email of emails) {
-      const delayDays = stepDelayMap[email.sequence_step_id];
-      const scheduled = new Date(now);
-
-      if (delayDays === 0) {
-        const hour = scheduled.getHours();
-        if (hour < 9 || hour >= 18) {
-          scheduled.setDate(scheduled.getDate() + 1);
-          scheduled.setHours(9, 0, 0, 0);
-        }
-      } else {
-        scheduled.setDate(scheduled.getDate() + delayDays);
-        scheduled.setHours(9, 0, 0, 0);
-      }
-
-      // Assign sender
       let sender: string | null = null;
       if (senderAccounts.length) {
         const key = email.prospect_id || email.contact_id;
@@ -605,37 +616,84 @@ server.tool(
         } else {
           const sorted = [...senderAccounts].sort((a, b) => (senderCounts[a] || 0) - (senderCounts[b] || 0));
           sender = sorted[0];
-          prospectSenderMap[key] = sender;
+          prospectSenderMap[key] = sender!;
         }
-        senderCounts[sender] = (senderCounts[sender] || 0) + 1;
+        senderCounts[sender!] = (senderCounts[sender!] || 0) + 1;
       }
 
+      // Set emails to scheduled with sender, but no date yet — recalculate below
       await supabase.from("emails").update({
-        scheduled_for: scheduled.toISOString(),
         send_status: "scheduled",
+        scheduled_for: null,
         sent_from: sender,
       }).eq("id", email.id);
     }
 
+    const now = new Date();
+
+    // Set sequence to active
     await supabase.from("sequences").update({
       status: "active",
       started_at: now.toISOString(),
     }).eq("id", sequence_id);
 
-    await syncCampaignStatus(sequence.campaign_id);
+    // Now use proper scheduling logic (same as recalculate_sequence_schedule)
+    const tzBase = new Date(now.toLocaleString("en-US", { timeZone: timezone }));
 
-    const scheduleLines = steps.map(s => {
-      const d = new Date(now);
-      if (s.delay_days === 0) {
-        if (d.getHours() < 9 || d.getHours() >= 18) { d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); }
-      } else { d.setDate(d.getDate() + s.delay_days); d.setHours(9, 0, 0, 0); }
-      return `  Step ${s.step_number} (day ${s.delay_days}): ${d.toLocaleString()}`;
-    });
+    function nextSendDay(from: Date, addDays: number): Date {
+      const target = new Date(from);
+      target.setDate(target.getDate() + addDays);
+      target.setHours(hoursStart, 0, 0, 0);
+      let safety = 0;
+      while (!sendDays.includes(String(target.getDay())) && safety < 7) {
+        target.setDate(target.getDate() + 1);
+        safety++;
+      }
+      return target;
+    }
+
+    // Group emails by step for scheduling
+    const emailsByStep: Record<string, typeof emails> = {};
+    for (const step of steps) {
+      emailsByStep[step.id] = emails.filter(e => e.sequence_step_id === step.id);
+    }
+
+    const scheduleLines: string[] = [];
+    const toSchedule: { id: string; updates: Record<string, unknown> }[] = [];
+
+    for (const step of steps) {
+      const stepEmails = emailsByStep[step.id] || [];
+      if (!stepEmails.length) continue;
+
+      let currentDate = nextSendDay(tzBase, step.delay_days);
+      let assignedToday = 0;
+
+      for (const email of stepEmails) {
+        if (assignedToday >= dailyCapacity) {
+          currentDate = nextSendDay(currentDate, 1);
+          assignedToday = 0;
+        }
+
+        toSchedule.push({
+          id: email.id,
+          updates: { scheduled_for: currentDate.toISOString(), send_status: "scheduled" },
+        });
+
+        assignedToday++;
+      }
+
+      scheduleLines.push(`  Step ${step.step_number} (day ${step.delay_days}): ${stepEmails.length} emails, starts ${currentDate.toLocaleDateString()}`);
+    }
+
+    // Apply schedules in batch
+    await batchUpdate(toSchedule, "emails");
+
+    await syncCampaignStatus(sequence.campaign_id);
 
     return {
       content: [{
         type: "text",
-        text: `Sequence started! ${emails.length} emails scheduled.\nSender accounts: ${senderAccounts.join(", ") || "default"}\n\nSchedule:\n${scheduleLines.join("\n")}`,
+        text: `Sequence started! ${emails.length} emails scheduled.\nSender accounts: ${senderAccounts.filter(a => a !== "_default").join(", ") || "default"}\nDaily capacity: ${dailyCapacity} (${senderAccounts.length} accounts × ${dailyLimitPerAccount}/day)\nSend days: ${sendDays.join(", ")} | Start hour: ${hoursStart}h (${timezone})\n\nSchedule:\n${scheduleLines.join("\n")}`,
       }],
     };
   }

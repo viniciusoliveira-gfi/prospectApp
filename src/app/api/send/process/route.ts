@@ -178,17 +178,10 @@ export async function POST(request: Request) {
   const completedSequences = new Set<string>()
 
   for (const email of emails) {
-    // Skip if contact has no email or is not active
+    // Skip if contact has no email or is not active (covers replied, bounced, opted_out)
     if (!email.contacts?.email || email.contacts.status !== 'active') {
       await supabase.from('emails').update({ send_status: 'skipped' }).eq('id', email.id)
-      results.push({ id: email.id, status: 'skipped', error: 'No email or contact inactive' })
-      continue
-    }
-
-    // Check if contact already replied
-    if (email.contacts.status === 'replied') {
-      await supabase.from('emails').update({ send_status: 'skipped' }).eq('id', email.id)
-      results.push({ id: email.id, status: 'skipped', error: 'Contact already replied' })
+      results.push({ id: email.id, status: 'skipped', error: `No email or contact not active (${email.contacts?.status || 'missing'})` })
       continue
     }
 
