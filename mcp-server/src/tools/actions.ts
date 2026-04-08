@@ -8,8 +8,9 @@ export function registerActionTools(server: McpServer, supabase: SupabaseClient)
     {},
     async () => {
       const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
+      const secret = process.env.CRON_SECRET || "";
       try {
-        const res = await fetch(`${appUrl}/api/send/process`, { method: "POST" });
+        const res = await fetch(`${appUrl}/api/send/process?secret=${secret}`, { method: "POST" });
         const data = await res.json();
         return { content: [{ type: "text", text: `Send processor result: ${JSON.stringify(data)}` }] };
       } catch (err) {
@@ -24,8 +25,9 @@ export function registerActionTools(server: McpServer, supabase: SupabaseClient)
     {},
     async () => {
       const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
+      const secret = process.env.CRON_SECRET || "";
       try {
-        const res = await fetch(`${appUrl}/api/gmail/check-replies`, { method: "POST" });
+        const res = await fetch(`${appUrl}/api/gmail/check-replies?secret=${secret}`, { method: "POST" });
         const data = await res.json();
         return { content: [{ type: "text", text: `Reply check result: ${JSON.stringify(data)}` }] };
       } catch (err) {
