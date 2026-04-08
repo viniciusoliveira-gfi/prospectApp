@@ -32,8 +32,6 @@ export async function POST(request: Request) {
       .from('emails')
       .update({ send_status: 'scheduled' })
       .in('id', stuckEmails.map(e => e.id))
-
-    console.log(`Recovered ${stuckEmails.length} stuck emails`)
   }
 
   // Load global sending config (campaign-specific config is loaded per-email later)

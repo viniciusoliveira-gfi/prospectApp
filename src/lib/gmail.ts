@@ -199,11 +199,8 @@ export async function sendEmail({
 }
 
 const GMAIL_LIMITS = {
-  maxPerDay: 25,
-  maxPerHour: 10,
-  minIntervalMs: 180000, // 3 minutes
-  sendingHoursStart: 9,
-  sendingHoursEnd: 18,
+  maxPerHour: 10,        // query limit for send processor batch size
+  minIntervalMs: 180000, // 3 minutes — rate limit between sends
 }
 
 export { GMAIL_LIMITS }
