@@ -481,13 +481,23 @@ export function SequenceDetail({ sequenceId, sequenceName, onBack }: SequenceDet
                       </div>
                     </div>
 
-                    {/* Reply snippet */}
-                    {email.reply_snippet && (
-                      <div className="px-4 py-3 bg-purple-50 border-t">
-                        <p className="text-xs font-medium text-purple-500 mb-1">Reply</p>
-                        <p className="text-sm text-purple-800">
-                          {cleanReplySnippet(email.reply_snippet)}
-                        </p>
+                    {/* Reply from contact */}
+                    {email.replied_at && email.reply_snippet && (
+                      <div className="border-t">
+                        <div className="bg-purple-50 px-4 py-2.5 flex items-center gap-2 border-b border-purple-100">
+                          <MessageSquare className="h-4 w-4 text-purple-500" />
+                          <span className="text-sm font-medium text-purple-700">
+                            Reply from {selectedContact?.first_name} {selectedContact?.last_name}
+                          </span>
+                          <span className="text-xs text-purple-400">
+                            {new Date(email.replied_at).toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="p-4 bg-purple-50/30">
+                          <div className="text-sm text-purple-800 leading-relaxed whitespace-pre-wrap">
+                            {cleanReplySnippet(email.reply_snippet)}
+                          </div>
+                        </div>
                       </div>
                     )}
                   </div>
