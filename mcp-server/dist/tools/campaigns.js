@@ -124,4 +124,55 @@ export function registerCampaignTools(server, supabase) {
             return { content: [{ type: "text", text: `Error: ${error.message}` }] };
         return { content: [{ type: "text", text: "Campaign settings updated." }] };
     });
+    server.tool("delete_campaign", "Permanently delete a campaign and all its data (sequences, steps, emails, prospects, contacts, experiments, activity log). Auto-pauses active sequences first. Cannot be undone.", {
+        campaign_id: z.string(),
+        confirm: z.boolean().describe("Must be true to confirm deletion"),
+    }, async ({ campaign_id, confirm }) => {
+        if (!confirm) {
+            return { content: [{ type: "text", text: "Deletion not confirmed. Set confirm: true to proceed." }] };
+        }
+        // Get campaign info
+        const { data: campaign } = await supabase
+            .from("campaigns")
+            .select("name")
+            .eq("id", campaign_id)
+            .single();
+        if (!campaign)
+            return { content: [{ type: "text", text: "Campaign not found." }] };
+        // Auto-pause any active sequences
+        const { data: activeSeqs } = await supabase
+            .from("sequences")
+            .select("id, name")
+            .eq("campaign_id", campaign_id)
+            .eq("status", "active");
+        if (activeSeqs?.length) {
+            await supabase
+                .from("sequences")
+                .update({ status: "paused", paused_at: new Date().toISOString() })
+                .eq("campaign_id", campaign_id)
+                .eq("status", "active");
+        }
+        // Count what will be deleted for the report
+        const { count: seqCount } = await supabase
+            .from("sequences").select("id", { count: "exact", head: true }).eq("campaign_id", campaign_id);
+        const { count: prospectCount } = await supabase
+            .from("prospects").select("id", { count: "exact", head: true }).eq("campaign_id", campaign_id);
+        const { count: contactCount } = await supabase
+            .from("contacts").select("id", { count: "exact", head: true }).eq("campaign_id", campaign_id);
+        // Delete the campaign — cascades handle everything
+        const { error } = await supabase
+            .from("campaigns")
+            .delete()
+            .eq("id", campaign_id);
+        if (error)
+            return { content: [{ type: "text", text: `Error: ${error.message}` }] };
+        return {
+            content: [{
+                    type: "text",
+                    text: `Campaign "${campaign.name}" deleted.\n` +
+                        `Cleaned up: ${seqCount || 0} sequences, ${prospectCount || 0} prospects, ${contactCount || 0} contacts` +
+                        (activeSeqs?.length ? `\n${activeSeqs.length} active sequences were paused before deletion.` : ""),
+                }],
+        };
+    });
 }
