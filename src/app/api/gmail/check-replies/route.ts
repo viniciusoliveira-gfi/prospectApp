@@ -130,8 +130,14 @@ export async function POST(request: Request) {
 
           if (!hasReply) continue
 
-          const latestReply = messages[messages.length - 1]
-          const snippet = latestReply.snippet || ''
+          // Find the CONTACT's reply (first message not from us), not our response
+          const contactReply = messages.find((msg) => {
+            const fromHeader = msg.payload?.headers?.find((h) => h.name === 'From')?.value || ''
+            const fromLower = fromHeader.toLowerCase()
+            return !ourAddresses.some(addr => fromLower.includes(addr)) &&
+              !BOUNCE_SENDERS.some(bs => fromLower.includes(bs))
+          })
+          const snippet = contactReply?.snippet || messages[messages.length - 1].snippet || ''
           const threadEmails = senderEmails.filter(e => e.gmail_thread_id === threadId)
 
           for (const email of threadEmails) {
