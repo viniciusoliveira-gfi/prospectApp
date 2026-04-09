@@ -20,18 +20,31 @@ export async function POST(request: Request) {
   const supabase = createAdminClient()
 
   // Recovery: reset emails stuck in 'sending' for more than 10 minutes
+  // BUT only if they don't have a gmail_message_id (meaning Gmail send succeeded)
   const stuckThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString()
   const { data: stuckEmails } = await supabase
     .from('emails')
-    .select('id')
+    .select('id, gmail_message_id')
     .eq('send_status', 'sending')
     .lt('scheduled_for', stuckThreshold)
 
   if (stuckEmails?.length) {
-    await supabase
-      .from('emails')
-      .update({ send_status: 'scheduled' })
-      .in('id', stuckEmails.map(e => e.id))
+    // Emails that were actually sent (have gmail_message_id) — mark as sent, not re-scheduled
+    const alreadySentViaGmail = stuckEmails.filter(e => e.gmail_message_id)
+    const trulyStuck = stuckEmails.filter(e => !e.gmail_message_id)
+
+    if (alreadySentViaGmail.length) {
+      await supabase
+        .from('emails')
+        .update({ send_status: 'sent', sent_at: new Date().toISOString() })
+        .in('id', alreadySentViaGmail.map(e => e.id))
+    }
+    if (trulyStuck.length) {
+      await supabase
+        .from('emails')
+        .update({ send_status: 'scheduled' })
+        .in('id', trulyStuck.map(e => e.id))
+    }
   }
 
   // Load global sending config (campaign-specific config is loaded per-email later)
@@ -123,28 +136,20 @@ export async function POST(request: Request) {
 
   const activeStepIds = activeSteps.map(s => s.id)
 
-  // STEP 1: Atomically claim emails by setting send_status = 'sending'
-  // This prevents concurrent cron runs from picking up the same emails
-  const { data: claimable } = await supabase
-    .from('emails')
-    .select('id')
-    .in('approval_status', ['approved', 'edited'])
-    .eq('send_status', 'scheduled')
-    .in('sequence_step_id', activeStepIds)
-    .lte('scheduled_for', now.toISOString())
-    .order('scheduled_for', { ascending: true })
-    .limit(GMAIL_LIMITS.maxPerHour)
+  // STEP 1: Atomically claim emails using PostgreSQL FOR UPDATE SKIP LOCKED
+  // This is truly atomic — concurrent cron runs cannot claim the same rows
+  const { data: claimedIds, error: claimError } = await supabase
+    .rpc('claim_emails_for_sending', {
+      p_step_ids: activeStepIds,
+      p_before: now.toISOString(),
+      p_limit: GMAIL_LIMITS.maxPerHour,
+    })
 
-  if (!claimable?.length) return NextResponse.json({ message: 'No emails ready to send', sent: 0 })
+  if (claimError || !claimedIds?.length) {
+    return NextResponse.json({ message: 'No emails ready to send', sent: 0 })
+  }
 
-  const claimIds = claimable.map(e => e.id)
-
-  // Atomically mark as 'sending' — second cron run will find nothing
-  await supabase
-    .from('emails')
-    .update({ send_status: 'sending' })
-    .in('id', claimIds)
-    .eq('send_status', 'scheduled') // extra safety: only claim if still scheduled
+  const claimIds = claimedIds.map((r: string) => r)
 
   // Now fetch the full data for claimed emails
   const { data: emails, error } = await supabase
@@ -273,17 +278,31 @@ ${email.body.replace(/\n/g, '<br/>')}
         continue
       }
 
-      // Also check DB: has this contact already received this step?
+      // Also check DB: has this contact already received (or is currently sending) this step?
       const { count: alreadySent } = await supabase
         .from('emails')
         .select('id', { count: 'exact', head: true })
         .eq('contact_id', email.contact_id)
         .eq('sequence_step_id', email.sequence_step_id)
-        .eq('send_status', 'sent')
+        .in('send_status', ['sent', 'sending'])
+        .neq('id', email.id) // exclude self
 
       if (alreadySent && alreadySent > 0) {
         await supabase.from('emails').update({ send_status: 'skipped', error_message: 'Duplicate — contact already received this step' }).eq('id', email.id)
         results.push({ id: email.id, status: 'skipped', error: 'Duplicate — already sent in DB' })
+        continue
+      }
+
+      // Guard: if email already has a gmail_message_id, it was sent via Gmail
+      // but the DB wasn't updated (e.g., app restarted). Just mark as sent.
+      if (email.gmail_message_id) {
+        await supabase.from('emails').update({
+          send_status: 'sent',
+          sent_at: email.sent_at || new Date().toISOString(),
+        }).eq('id', email.id)
+        sentDedupSet.add(dedupKey)
+        results.push({ id: email.id, status: 'sent', error: 'Already sent via Gmail — recovered' })
+        sentCount++
         continue
       }
 
